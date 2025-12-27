@@ -260,7 +260,7 @@ class GitHubScraper(BaseScraper):
             'source': 'scraped-github',
             'type': 'Software',
             'tags': tags,
-            'scraped_at': datetime.now().isoformat(),
+            'scraped_at': datetime.now(),
             'external_id': str(repo['id']),
             'source_rating': star_rating,  # Normalized star rating (2-5)
             'source_rating_count': stars,  # Actual GitHub star count

@@ -300,7 +300,7 @@ class ThingiverseScraper(BaseScraper):
             'source': 'scraped-thingiverse',
             'type': product_type,
             'tags': tags,
-            'scraped_at': datetime.now().isoformat(),
+            'scraped_at': datetime.now(),
             'external_id': str(thing['id']),
             'source_rating': rating,
             'source_rating_count': rating_count,

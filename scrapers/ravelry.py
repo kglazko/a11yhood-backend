@@ -31,10 +31,11 @@ class RavelryScraper(BaseScraper):
     
     def __init__(self, supabase_client, access_token: Optional[str] = None):
         super().__init__(supabase_client, access_token)
-        # Ravelry API expects OAuth2 bearer tokens, not Basic auth
-        self.client = httpx.AsyncClient(
-            headers={"Authorization": f"Bearer {access_token}"} if access_token else None
-        )
+        # Ravelry API expects OAuth2 bearer tokens; keep Accept by default for JSON responses
+        default_headers = {"Accept": "application/json"}
+        if access_token:
+            default_headers["Authorization"] = f"Bearer {access_token}"
+        self.client = httpx.AsyncClient(headers=default_headers)
     
     def get_source_name(self) -> str:
         return 'scraped-ravelry'
@@ -65,18 +66,6 @@ class RavelryScraper(BaseScraper):
         except Exception as e:
             print(f"Error scraping Ravelry URL: {e}")
             return None
-    
-    async def _fetch_pattern_details(self, pattern_id: str) -> Optional[Dict[str, Any]]:
-        """Fetch pattern details from Ravelry API"""
-        try:
-            url = f"https://api.ravelry.com/patterns/{pattern_id}.json"
-            headers = {"Authorization": f"Bearer {self.access_token}"}
-            response = await self.client.get(url, headers=headers, timeout=10.0)
-            if response.status_code == 200:
-                return response.json()
-        except Exception as e:
-            print(f"Error fetching Ravelry pattern: {e}")
-        return None
     
     async def scrape(self, test_mode: bool = False, test_limit: int = 5) -> Dict[str, Any]:
         """
@@ -175,10 +164,10 @@ class RavelryScraper(BaseScraper):
         }
         
         try:
+            await self._throttle_request()
             response = await self.client.get(
                 url,
                 params=params,
-                headers={'Accept': 'application/json'},
             )
             response.raise_for_status()
             
@@ -191,15 +180,13 @@ class RavelryScraper(BaseScraper):
             print(f"[Ravelry] Error searching PA category '{pa_category}' page {page}: {e}")
             return []
     
-    async def _fetch_pattern_details(self, pattern_id: int) -> Optional[Dict[str, Any]]:
-        """Fetch full pattern details by ID"""
+    async def _fetch_pattern_details(self, pattern_id: int | str) -> Optional[Dict[str, Any]]:
+        """Fetch full pattern details by ID or permalink"""
         url = f"{self.API_BASE_URL}/patterns/{pattern_id}.json"
         
         try:
-            response = await self.client.get(
-                url,
-                headers={'Accept': 'application/json'},
-            )
+            await self._throttle_request()
+            response = await self.client.get(url)
             response.raise_for_status()
             data = response.json()
             pattern = data.get('pattern') or (data.get('patterns') or [None])[0]
@@ -298,7 +285,7 @@ class RavelryScraper(BaseScraper):
             'source': 'scraped-ravelry',
             'type': product_type,
             'tags': unique_tags,
-            'scraped_at': datetime.now().isoformat(),
+            'scraped_at': datetime.now(),
             'external_id': str(pattern['id']),
             'source_rating': rating,
             'source_rating_count': rating_count,

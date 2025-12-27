@@ -61,6 +61,7 @@ def main():
     
     seeds = [
         ("seed_supported_sources", "seed_supported_sources", "seed_supported_sources"),
+        ("seed_oauth_configs", "seed_oauth_configs", "seed_oauth_configs"),
         ("seed_scraper_search_terms", "seed_scraper_search_terms", "main"),
         ("seed_test_users", "seed_test_users", "seed_users"),
         ("seed_test_product", "seed_test_product", "seed_product"),
