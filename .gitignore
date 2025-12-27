@@ -1,0 +1,72 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Dependencies
+node_modules
+dist
+dist-ssr
+*-dist
+*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+
+# Environment variables
+.env
+.env.local
+.env.test
+
+# SQLite test databases
+test*.db
+test*.db-shm
+test*.db-wal
+.env.production
+*.env
+
+# SSL Certificates (mkcert)
+localhost+*.pem
+localhost+*-key.pem
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+**/agent-eval-report*
+
+# Build outputs
+packages
+pids
+.file-manifest
+dist/
+build/
+*.egg-info/
+
+
+
+# Misc
+.devcontainer/
