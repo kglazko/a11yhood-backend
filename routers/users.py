@@ -12,6 +12,7 @@ from services.auth import get_current_user, get_current_user_optional, ensure_ad
 from services.security_logger import log_role_change
 from fastapi import Request
 from config import settings
+import os
 
 
 
@@ -132,11 +133,17 @@ async def create_or_update_user_account(
     existing = db.table("users").select("*").eq("id", user_id).execute()
     is_update = existing.data and len(existing.data) > 0
     
+    # Determine test mode safely, falling back to environment if settings is unavailable
+    try:
+        test_mode = bool(getattr(settings, "TEST_MODE", False))
+    except NameError:
+        test_mode = os.getenv("TEST_MODE", "false").lower() == "true"
+
     # In production mode, require auth for updates (creates allowed for OAuth)
-    if not settings.TEST_MODE and is_update and not current_user:
+    if not test_mode and is_update and not current_user:
         raise HTTPException(status_code=401, detail="Authentication required")
     
-    print(f"[users] is_update={is_update}, test_mode={settings.TEST_MODE}, existing_count={len(existing.data) if existing.data else 0}")
+    print(f"[users] is_update={is_update}, test_mode={test_mode}, existing_count={len(existing.data) if existing.data else 0}")
 
     # Build user data and ensure github_id is present to satisfy schema
     github_id = (current_user or {}).get("github_id") or user_id
