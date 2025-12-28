@@ -5,7 +5,7 @@ In TEST_MODE, accepts dev tokens for stable test identities without real OAuth.
 Security: All authorization checks enforce server-side validation; never trust client roles.
 """
 from fastapi import Header, HTTPException, Depends
-from config import Settings
+from config import Settings, settings
 from services.database import get_db, verify_token
 from services.security_logger import log_auth_failure
 from database_adapter import DatabaseAdapter
@@ -127,7 +127,7 @@ async def get_current_user_optional(authorization: str = Header(None)):
         return await get_current_user(authorization)
     except HTTPException as e:
         # In test mode, if dev user doesn't exist yet, return None (allows user creation)
-        if Settings.TEST_MODE and "not found" in str(e.detail):
+        if settings.TEST_MODE and "not found" in str(e.detail):
             return None
         raise
 
