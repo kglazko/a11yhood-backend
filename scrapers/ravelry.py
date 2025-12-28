@@ -16,11 +16,14 @@ class RavelryScraper(BaseScraper):
     knitting and crochet patterns designed for accessibility needs
     """
     
+    # Personal-attribute slugs for accessibility-related patterns. Include known variants to avoid missing results
+    # if the API expects the full slug (e.g., "mobility-aid-accessory").
     PA_CATEGORIES = [
         'medical-device-access',
         'medical-device-accessory',
-        'mobility-aid-accessor',
+        'mobility-aid-accessory',
         'other-accessibility',
+        'adaptive',
         'therapy-aid'
     ]
     
@@ -98,6 +101,9 @@ class RavelryScraper(BaseScraper):
                     patterns = await self._search_patterns(pa_category, page)
                     
                     if not patterns:
+                        # Warn when a category returns nothing on the first page so we can detect stale slugs.
+                        if page == 1:
+                            print(f"[Ravelry] No results for category '{pa_category}' (page 1)")
                         break  # No more results
                     
                     for pattern in patterns:
