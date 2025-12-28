@@ -8,6 +8,13 @@ Read this first when operating on the repo. It summarizes conventions, helper ut
 - When adding features, update coverage docs so tests map to behavior.
 - Default to snake_case
 
+## Git Workflow
+- **NEVER run `git commit` commands** - the user will handle all commits themselves
+- You may suggest commit messages or explain what should be committed
+- You may run `git add` to stage files when appropriate
+- You may run `git status` or `git diff` to check changes
+- Focus on making changes and letting the user review and commit them
+
 ## Code Commenting Guidelines
 Keep code readable first through clear names and small functions. Use comments to clarify intent or context that code alone cannot convey.
 
