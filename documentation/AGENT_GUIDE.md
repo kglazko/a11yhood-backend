@@ -33,6 +33,34 @@ Keep code readable first through clear names and small functions. Use comments t
   - Favor examples over prose when helpful (short snippet > long paragraph).
   - Default to self-documenting code; if you feel the need for long comments, consider refactoring first.
 
+## Timestamp Handling
+**CRITICAL: Always use timezone-aware UTC datetimes**
+
+Python's `datetime.utcnow()` is deprecated and will be removed. Always use timezone-aware datetimes:
+
+```python
+# ❌ WRONG - deprecated and naive datetime
+from datetime import datetime
+timestamp = datetime.utcnow()
+
+# ✅ CORRECT - timezone-aware UTC datetime
+from datetime import datetime, UTC
+timestamp = datetime.now(UTC)
+
+# For database storage (ISO format)
+timestamp_str = datetime.now(UTC).isoformat()
+
+# For naive datetime (if required by legacy code)
+naive_timestamp = datetime.now(UTC).replace(tzinfo=None)
+```
+
+**Key rules:**
+- Always import `UTC` from `datetime`: `from datetime, UTC`
+- Use `datetime.now(UTC)` for current UTC time
+- Use `.isoformat()` when storing timestamps as strings
+- Use `.replace(tzinfo=None)` only if interfacing with legacy code that requires naive datetimes
+- SQLAlchemy models use naive datetimes internally (see `database_adapter.py`'s `utcnow_naive()` helper)
+
 ## Security Defaults
 - Enforce authn/authz for every mutating endpoint; never trust client roles or IDs.
 - Guard ownership and role checks (admin/moderator/manager) centrally to prevent IDOR.

@@ -282,8 +282,11 @@ class RavelryScraper(BaseScraper):
         updated_at = pattern.get('updated_at')
         if updated_at:
             try:
-                # Ravelry returns ISO 8601 format
-                source_last_updated = datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
+                # Ravelry returns custom format: '2019/08/29 20:22:16 -0400'
+                # Parse it and convert to ISO format string for database storage
+                from dateutil import parser
+                parsed_date = parser.parse(updated_at)
+                source_last_updated = parsed_date.isoformat()
             except Exception as e:
                 print(f"[Ravelry] Failed to parse last updated date: {e}")
         
@@ -295,7 +298,7 @@ class RavelryScraper(BaseScraper):
             'source': 'ravelry',
             'type': product_type,
             'tags': unique_tags,
-            'scraped_at': datetime.now(),
+            'scraped_at': datetime.now().isoformat(),
             'external_id': str(pattern['id']),
             'source_rating': rating,
             'source_rating_count': rating_count,
