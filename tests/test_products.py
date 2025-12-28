@@ -10,6 +10,145 @@ def test_get_products_success(client, test_product):
     assert any(item["id"] == test_product["id"] for item in data)
 
 
+def test_count_products_success(client, test_product):
+    """Test /count endpoint returns total product count"""
+    response = client.get("/api/products/count")
+    assert response.status_code == 200
+    data = response.json()
+    assert "count" in data
+    assert data["count"] >= 1  # At least the test_product
+
+
+def test_count_products_with_filters(client, clean_database, test_product):
+    """Test /count respects same filters as /products"""
+    p1_id = str(uuid.uuid4())
+    p2_id = str(uuid.uuid4())
+    p3_id = str(uuid.uuid4())
+
+    clean_database.table("products").insert([
+        {
+            "id": p1_id,
+            "name": "Assistive Spoon",
+            "description": "Thingiverse fabrication tool",
+            "source": "Thingiverse",
+            "type": "Fabrication",
+            "url": "https://www.thingiverse.com/thing:spoon",
+        },
+        {
+            "id": p2_id,
+            "name": "Voice Control Tool",
+            "description": "Github software tool",
+            "source": "Github",
+            "type": "Tool",
+            "url": "https://github.com/example/tool",
+        },
+        {
+            "id": p3_id,
+            "name": "Knit Pattern",
+            "description": "Ravelry knit",
+            "source": "Ravelry",
+            "type": "Knitting",
+            "url": "https://www.ravelry.com/patterns/library/knit",
+        },
+    ]).execute()
+
+    # Count all products with Thingiverse or Github source
+    response = client.get("/api/products/count?sources=Thingiverse,Github")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["count"] == 2  # p1 and p2 only
+
+
+def test_count_products_with_type_filter(client, clean_database):
+    """Test /count filters by type"""
+    p1_id = str(uuid.uuid4())
+    p2_id = str(uuid.uuid4())
+
+    clean_database.table("products").insert([
+        {
+            "id": p1_id,
+            "name": "3D Model",
+            "source": "Thingiverse",
+            "type": "Fabrication",
+            "url": "https://www.thingiverse.com/thing:1",
+        },
+        {
+            "id": p2_id,
+            "name": "Software Tool",
+            "source": "Github",
+            "type": "Software",
+            "url": "https://github.com/example/tool",
+        },
+    ]).execute()
+
+    response = client.get("/api/products/count?type=Fabrication")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["count"] == 1  # Only p1
+
+
+def test_count_products_with_tag_filter(client, clean_database):
+    """Test /count filters by tags"""
+    tag_id = str(uuid.uuid4())
+    p1_id = str(uuid.uuid4())
+    p2_id = str(uuid.uuid4())
+
+    clean_database.table("tags").insert({"id": tag_id, "name": "AssistiveTech"}).execute()
+    clean_database.table("products").insert([
+        {
+            "id": p1_id,
+            "name": "Tagged Product",
+            "source": "Thingiverse",
+            "type": "Fabrication",
+            "url": "https://www.thingiverse.com/thing:tagged",
+        },
+        {
+            "id": p2_id,
+            "name": "Untagged Product",
+            "source": "Github",
+            "type": "Software",
+            "url": "https://github.com/example/untagged",
+        },
+    ]).execute()
+    clean_database.table("product_tags").insert({
+        "product_id": p1_id,
+        "tag_id": tag_id,
+    }).execute()
+
+    response = client.get("/api/products/count?tags=AssistiveTech")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["count"] == 1  # Only p1
+
+
+def test_count_products_with_search(client, clean_database):
+    """Test /count filters by search term"""
+    p1_id = str(uuid.uuid4())
+    p2_id = str(uuid.uuid4())
+
+    clean_database.table("products").insert([
+        {
+            "id": p1_id,
+            "name": "Voice Control Software",
+            "source": "Github",
+            "type": "Software",
+            "url": "https://github.com/example/voice",
+        },
+        {
+            "id": p2_id,
+            "name": "3D Printed Cup",
+            "source": "Thingiverse",
+            "type": "Fabrication",
+            "url": "https://www.thingiverse.com/thing:cup",
+        },
+    ]).execute()
+
+    response = client.get("/api/products/count?search=voice")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["count"] == 1  # Only p1 matches "voice"
+
+
 def test_get_products_with_filters(client, clean_database, test_product):
     p1_id = str(uuid.uuid4())
     p2_id = str(uuid.uuid4())

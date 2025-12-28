@@ -195,6 +195,78 @@ async def get_products(
     return normalized
 
 
+@router.get("/count")
+async def count_products(
+    source: Optional[str] = None,
+    sources: Optional[list[str]] = Query(None, description="Comma-separated or repeated source values"),
+    type: Optional[str] = None,
+    types: Optional[list[str]] = Query(None, description="Comma-separated or repeated type values"),
+    tags: Optional[list[str]] = Query(None, description="Filter products that have any of these tag names"),
+    search: Optional[str] = None,
+    created_by: Optional[str] = None,
+    include_banned: bool = Query(False, description="Include banned products (admin/mod only)"),
+    current_user: Optional[dict] = Depends(get_current_user_optional),
+    db = Depends(get_db),
+):
+    """Get total count of products matching filters (for pagination UI).
+    
+    Returns {count: int} to help frontend paginate through all matching products.
+    Applies same filters as /api/products but returns only the count.
+    """
+    def _normalize_list(values: Iterable[str]) -> list[str]:
+        normalized: list[str] = []
+        for v in values:
+            if not v or not isinstance(v, str):
+                continue
+            for part in v.split(","):
+                item = part.strip()
+                if item:
+                    normalized.append(item)
+        return normalized
+
+    query = db.table("products").select("id")  # Only select id for count
+
+    source_values = set(_normalize_list([source] if source else []) + _normalize_list(sources or []))
+    type_values = set(_normalize_list([type] if type else []) + _normalize_list(types or []))
+    tag_values = _normalize_list(tags or [])
+
+    if source_values:
+        query = query.in_("source", list(source_values))
+    
+    if type_values:
+        query = query.in_("type", list(type_values))
+
+    if tag_values:
+        tag_rows = db.table("tags").select("id,name").in_("name", tag_values).execute()
+        tag_map = {row["name"]: row["id"] for row in (tag_rows.data or []) if row.get("id") and row.get("name")}
+        tag_ids = [tag_map[name] for name in tag_values if name in tag_map]
+        if not tag_ids:
+            return {"count": 0}
+        pt_rows = db.table("product_tags").select("product_id, tag_id").in_("tag_id", tag_ids).execute()
+        product_ids_with_tags = {row["product_id"] for row in (pt_rows.data or []) if row.get("product_id")}
+        if not product_ids_with_tags:
+            return {"count": 0}
+        query = query.in_("id", list(product_ids_with_tags))
+    
+    if search:
+        query = query.ilike("name", f"%{search}%")
+    
+    if created_by:
+        query = query.eq("created_by", created_by)
+    
+    if include_banned:
+        if not current_user or current_user.get("role") not in {"admin", "moderator"}:
+            raise HTTPException(status_code=403, detail="Moderator or admin role required to view banned products")
+    
+    response = query.execute()
+    products = response.data or []
+    
+    if not include_banned:
+        products = [p for p in products if not p.get("banned")]
+    
+    return {"count": len(products)}
+
+
 @router.get("/exists")
 async def product_exists(
     url: str,
