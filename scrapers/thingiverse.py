@@ -292,6 +292,17 @@ class ThingiverseScraper(BaseScraper):
         if any('laser' in cat or 'cut' in cat for cat in categories):
             product_type = 'Fabrication'
         
+        # Extract last updated timestamp from Thingiverse
+        # Thingiverse provides 'modified' or 'updated' field
+        source_last_updated = None
+        modified = thing.get('modified') or thing.get('updated')
+        if modified:
+            try:
+                # Thingiverse returns ISO 8601 format
+                source_last_updated = datetime.fromisoformat(modified.replace('Z', '+00:00'))
+            except Exception as e:
+                print(f"[Thingiverse] Failed to parse last updated date: {e}")
+        
         return {
             'name': thing['name'],
             'description': thing.get('description', ''),
@@ -304,6 +315,7 @@ class ThingiverseScraper(BaseScraper):
             'external_id': str(thing['id']),
             'source_rating': rating,
             'source_rating_count': rating_count,
+            'source_last_updated': source_last_updated,
             'external_data': {
                 'rating': rating,
                 'rating_count': rating_count,

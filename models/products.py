@@ -13,6 +13,7 @@ class ProductBase(BaseModel):
     image_url: Optional[HttpUrl] = None
     external_id: Optional[str] = None  # ID from external source
     tags: Optional[list[str]] = Field(default_factory=list)
+    source_last_updated: Optional[datetime] = None  # Last updated timestamp from source platform
 
 
 class ProductCreate(ProductBase):
@@ -28,6 +29,7 @@ class ProductUpdate(BaseModel):
     image_url: Optional[HttpUrl] = None
     external_id: Optional[str] = None
     tags: Optional[list[str]] = None
+    source_last_updated: Optional[datetime] = None
 
 
 class ProductResponse(ProductBase):
@@ -44,6 +46,7 @@ class ProductResponse(ProductBase):
     rating_count: int = 0
     source_rating: Optional[float] = None
     source_rating_count: Optional[int] = None
+    source_last_updated: Optional[datetime] = None
     stars: Optional[int] = None
     urls: list[ProductUrlResponse] = Field(default_factory=list)
     editor_ids: list[str] = Field(default_factory=list)

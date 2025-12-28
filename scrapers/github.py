@@ -252,6 +252,17 @@ class GitHubScraper(BaseScraper):
         else:
             star_rating = None
         
+        # Extract last updated timestamp from GitHub
+        # GitHub provides both 'updated_at' and 'pushed_at' - use pushed_at as it's more accurate for code changes
+        source_last_updated = None
+        pushed_at = repo.get('pushed_at') or repo.get('updated_at')
+        if pushed_at:
+            try:
+                # GitHub returns ISO 8601 format: "2024-12-28T12:34:56Z"
+                source_last_updated = datetime.fromisoformat(pushed_at.replace('Z', '+00:00'))
+            except Exception as e:
+                print(f"[GitHub] Failed to parse last updated date: {e}")
+        
         return {
             'name': repo['name'],
             'description': repo.get('description', ''),
@@ -264,6 +275,7 @@ class GitHubScraper(BaseScraper):
             'external_id': str(repo['id']),
             'source_rating': star_rating,  # Normalized star rating (2-5)
             'source_rating_count': stars,  # Actual GitHub star count
+            'source_last_updated': source_last_updated,
             'external_data': {
                 'language': language,
                 'topics': topics,

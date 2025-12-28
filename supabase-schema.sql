@@ -170,6 +170,7 @@
     image_alt TEXT,
     source_rating NUMERIC(3,2),
     source_rating_count INTEGER,
+    source_last_updated TIMESTAMPTZ,
     scraped_at TIMESTAMPTZ,
     created_by UUID REFERENCES users(id) ON DELETE SET NULL,
     banned BOOLEAN DEFAULT FALSE,

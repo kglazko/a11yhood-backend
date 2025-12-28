@@ -277,6 +277,17 @@ class RavelryScraper(BaseScraper):
         rating = pattern.get('rating_average') or pattern.get('rating')
         rating_count = pattern.get('rating_count', 0)
         
+        # Extract last updated timestamp from Ravelry
+        # Ravelry provides 'updated_at' field for when the pattern was last modified
+        source_last_updated = None
+        updated_at = pattern.get('updated_at')
+        if updated_at:
+            try:
+                # Ravelry returns ISO 8601 format
+                source_last_updated = datetime.fromisoformat(updated_at.replace('Z', '+00:00'))
+            except Exception as e:
+                print(f"[Ravelry] Failed to parse last updated date: {e}")
+        
         return {
             'name': pattern['name'],
             'description': description,
@@ -289,6 +300,7 @@ class RavelryScraper(BaseScraper):
             'external_id': str(pattern['id']),
             'source_rating': rating,
             'source_rating_count': rating_count,
+            'source_last_updated': source_last_updated,
             'external_data': {
                 'rating': rating,
                 'rating_count': rating_count,

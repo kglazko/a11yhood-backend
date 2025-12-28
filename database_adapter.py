@@ -38,6 +38,7 @@ class Product(Base):
     external_data = Column(JSON)  # Additional data from source
     source_rating = Column(Float)  # Average rating from source platform
     source_rating_count = Column(Integer)  # Number of ratings from source platform
+    source_last_updated = Column(DateTime)  # Last updated timestamp from source platform
     scraped_at = Column(DateTime)  # Last scraped timestamp
     banned = Column(Boolean, default=False)
     banned_reason = Column(Text)
