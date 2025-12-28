@@ -11,6 +11,8 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from config import settings, load_settings_from_env
 from routers import activities, blog_posts, collections, discussions, product_urls, products, ratings, requests, scrapers, sources, users
+from services.database import get_db
+from services.scheduled_scrapers import get_scheduled_scraper_service
 
 
 app = FastAPI(
@@ -127,6 +129,31 @@ async def validate_security_configuration():
         f"  - SECRET_KEY length: {len(local_settings.SECRET_KEY)} chars\n"
         f"  - CORS origins: {len(get_cors_origins())} configured\n"
     )
+    
+    # Initialize scheduled scrapers (if not in test mode)
+    if not local_settings.TEST_MODE:
+        try:
+            scheduler_service = get_scheduled_scraper_service()
+            db = get_db()
+            scheduler_service.initialize(db)
+            scheduler_service.start()
+            logger.info("Scheduled scraper service started")
+        except Exception as e:
+            logger.error(f"Failed to initialize scheduled scrapers: {e}")
+            # Don't fail startup if scheduler fails, just log the error
+    else:
+        logger.info("Scheduled scrapers disabled in TEST_MODE")
+
+
+@app.on_event("shutdown")
+async def shutdown_scheduled_scrapers():
+    """Stop scheduled scrapers on shutdown"""
+    try:
+        scheduler_service = get_scheduled_scraper_service()
+        scheduler_service.stop()
+        logger.info("Scheduled scraper service stopped")
+    except Exception as e:
+        logger.error(f"Error stopping scheduled scrapers: {e}")
 
 def get_cors_origins():
     """Build strict CORS allowlist from environment.
@@ -287,6 +314,25 @@ async def health_check():
 @app.get("/api/scraping-logs")
 async def get_scraping_logs(limit: int = 50):
     return []
+
+
+@app.get("/api/scrapers/schedule")
+async def get_scheduled_scrapers():
+    """Get status of scheduled scrapers"""
+    try:
+        scheduler_service = get_scheduled_scraper_service()
+        jobs = await scheduler_service.get_jobs()
+        return {
+            "status": "enabled" if scheduler_service.scheduler and scheduler_service.scheduler.running else "disabled",
+            "jobs": jobs
+        }
+    except Exception as e:
+        logger.error(f"Error getting scheduled scrapers status: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "jobs": []
+        }
 
 
 # Include routers
