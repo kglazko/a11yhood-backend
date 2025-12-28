@@ -69,6 +69,10 @@ class ScheduledScraperService:
         logger.info("  - Thingiverse: Daily at 2:30 AM UTC")
         logger.info("  - Ravelry: Daily at 3:00 AM UTC")
     
+    async def _run_github_scrape(self):
+        """Run GitHub scraper"""
+        await self._run_scraper("github")
+    
     async def _run_thingiverse_scrape(self):
         """Run Thingiverse scraper"""
         await self._run_scraper("thingiverse")
