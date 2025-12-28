@@ -214,8 +214,35 @@ async def get_product_types(
         }
         # Fallback to distinct product types if table is empty/missing.
         if not types:
-            product_types = db.table("products").select("type").execute()
-            types = {row["type"] for row in (product_types.data or []) if row.get("type")}
+            # Try Supabase distinct selection first to avoid scanning all rows.
+            try:
+                if getattr(db, "backend", None) == "supabase":
+                    resp = db.table("products").select("type", distinct=True).execute()
+                    types = {
+                        str(row.get("type")).strip()
+                        for row in (resp.data or [])
+                        if row.get("type") and str(row.get("type")).strip()
+                    }
+                else:
+                    raise TypeError("distinct not supported for this backend")
+            except TypeError:
+                # Fallback: paginate through all products to avoid default caps (e.g., 1000) and gather unique types.
+                page_size = 1000
+                offset = 0
+                found: set[str] = set()
+                while True:
+                    resp = db.table("products").select("type").range(offset, offset + page_size - 1).execute()
+                    rows = resp.data or []
+                    if not rows:
+                        break
+                    for row in rows:
+                        t = row.get("type")
+                        if t and str(t).strip():
+                            found.add(str(t).strip())
+                    if len(rows) < page_size:
+                        break
+                    offset += page_size
+                types = found
         return {"types": sorted(types)}
     except Exception as e:
         return {"types": []}
@@ -391,44 +418,79 @@ async def count_products(
     if tag_mode not in {"or", "and"}:
         raise HTTPException(status_code=400, detail="tags_mode must be 'or' or 'and'")
 
-    query = db.table("products").select("id,banned,source_rating")
+    base_query = db.table("products")
 
     source_values = set(_normalize_list(source) + _normalize_list(sources))
     source_values = set(_canonicalize_sources(db, list(source_values)))
     type_values = set(_normalize_list(type) + _normalize_list(types))
     tag_values = _normalize_list(tags)
 
-    if source_values:
-        query = query.in_("source", list(source_values))
-    
-    if type_values:
-        query = query.in_("type", list(type_values))
-
+    # Precompute tag filter once for reuse
+    product_ids_with_tags: Optional[set[str]] = None
     if tag_values:
         product_ids_with_tags = get_product_ids_for_tags(db, tag_values, tag_mode)
         if not product_ids_with_tags:
             return {"count": 0}
+
+    # Build main query used when min_rating is provided (needs rows for rating calc)
+    query = base_query.select("id,banned,source_rating")
+    if source_values:
+        query = query.in_("source", list(source_values))
+    if type_values:
+        query = query.in_("type", list(type_values))
+    if product_ids_with_tags is not None:
         query = query.in_("id", list(product_ids_with_tags))
-    
     if search:
         query = query.ilike("name", f"%{search}%")
-    
     if created_by:
         query = query.eq("created_by", created_by)
-    
+
     if include_banned:
         if not current_user or current_user.get("role") not in {"admin", "moderator"}:
             raise HTTPException(status_code=403, detail="Moderator or admin role required to view banned products")
     
+    # For min_rating is None, request an exact count to avoid the 1000-row PostgREST cap.
+    if min_rating is None:
+        total = None
+        try:
+            # Use distinct when supported (Supabase) to guard against any accidental duplicates.
+            if getattr(db, "backend", None) == "supabase":
+                count_query = base_query.select("id", count="exact", distinct=True)
+            else:
+                count_query = base_query.select("id", count="exact")
+            if source_values:
+                count_query = count_query.in_("source", list(source_values))
+            if type_values:
+                count_query = count_query.in_("type", list(type_values))
+            if product_ids_with_tags is not None:
+                count_query = count_query.in_("id", list(product_ids_with_tags))
+            if search:
+                count_query = count_query.ilike("name", f"%{search}%")
+            if created_by:
+                count_query = count_query.eq("created_by", created_by)
+            if not include_banned:
+                count_query = count_query.eq("banned", False)
+
+            count_resp = count_query.execute()
+            if getattr(count_resp, "count", None) is not None:
+                total = count_resp.count
+            else:
+                total = len(count_resp.data or [])
+        except TypeError:
+            # SQLite adapter does not support count parameter; fall back to length of fetched rows.
+            response = query.execute()
+            products = response.data or []
+            if not include_banned:
+                products = [p for p in products if not p.get("banned")]
+            total = len(products)
+
+        return {"count": total}
+
     response = query.execute()
     products = response.data or []
     
     if not include_banned:
         products = [p for p in products if not p.get("banned")]
-
-    # If no rating filter is requested, skip rating lookups to avoid heavy IN queries.
-    if min_rating is None:
-        return {"count": len(products)}
 
     ratings_map = build_display_rating_map(db, products)
     products = [p for p in products if rating_meets_threshold(p, ratings_map, min_rating)]
