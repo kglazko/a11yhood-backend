@@ -1,8 +1,8 @@
 """
 Seed initial scraper search terms for development.
 
-Populates the scraper_search_terms table (one row per term) for all platforms.
-Works with both SQLite and Supabase.
+Populates scraper_search_terms with one row per platform storing a search_terms array
+to match the Supabase schema.
 """
 from config import get_settings
 from database_adapter import DatabaseAdapter
@@ -42,7 +42,8 @@ def main():
             ],
         },
         {
-            "platform": "ravelry",
+            # Align with Supabase migration key
+            "platform": "ravelry_pa_categories",
             "terms": [
                 "medical-device-access",
                 "medical-device-accessory",
@@ -58,16 +59,15 @@ def main():
         terms = seed["terms"]
         
         try:
-            # Check if any terms exist for this platform
-            existing = db.table("scraper_search_terms").select("search_term").eq("platform", platform).limit(1).execute()
-            
+            existing = db.table("scraper_search_terms").select("platform").eq("platform", platform).limit(1).execute()
+
+            payload = {"platform": platform, "search_terms": terms}
             if not existing.data:
-                # Insert one row per search term
-                rows = [{"platform": platform, "search_term": term} for term in terms]
-                db.table("scraper_search_terms").insert(rows).execute()
-                print(f"Seeded {len(terms)} search terms for platform={platform}")
+                db.table("scraper_search_terms").insert(payload).execute()
+                print(f"Seeded search terms for platform={platform}")
             else:
-                print(f"scraper_search_terms already seeded for platform={platform} ({len(existing.data)} terms)")
+                db.table("scraper_search_terms").update({"search_terms": terms}).eq("platform", platform).execute()
+                print(f"Updated search terms for platform={platform}")
         except Exception as e:
             print(f"Failed to seed scraper_search_terms for platform={platform}: {e}")
 

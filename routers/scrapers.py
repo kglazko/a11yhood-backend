@@ -573,18 +573,17 @@ async def disconnect_oauth(
 ALLOWED_SEARCH_PLATFORMS = {
     "github": "github",
     "thingiverse": "thingiverse",
-    "ravelry": "ravelry",
+    "ravelry": "ravelry_pa_categories",
 }
 
 
 def _load_search_terms(db, platform: str, fallback: list[str]) -> list[str]:
-    """Load search terms for a platform from the normalized table (one row per search term)."""
+    """Load search terms for a platform from single-row search_terms array (Supabase-aligned)."""
     try:
-        rows = db.table("scraper_search_terms").select("search_term").eq("platform", platform).execute()
-        if rows.data and len(rows.data) > 0:
-            terms = [row.get("search_term") for row in rows.data if row.get("search_term")]
-            if terms:
-                return terms
+        row = db.table("scraper_search_terms").select("search_terms").eq("platform", platform).limit(1).execute()
+        terms = (row.data or [{}])[0].get("search_terms") if row.data else None
+        if isinstance(terms, list) and terms:
+            return terms
     except Exception:
         pass
     return fallback
@@ -648,12 +647,9 @@ async def update_search_terms(
     sanitized = [term.strip() for term in request.search_terms]
 
     try:
-        # Delete all existing terms for this platform
-        db.table("scraper_search_terms").delete().eq("platform", key).execute()
-        
-        # Insert new terms (one row per search term)
-        term_rows = [{"platform": key, "search_term": term} for term in sanitized]
-        db.table("scraper_search_terms").insert(term_rows).execute()
+        # Upsert single row per platform with search_terms array
+        payload = {"platform": key, "search_terms": sanitized}
+        db.table("scraper_search_terms").upsert(payload).execute()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to persist search terms: {e}")
 

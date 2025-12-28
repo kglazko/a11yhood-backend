@@ -74,13 +74,12 @@ class ScraperService:
     async def scrape_thingiverse(self, access_token: Optional[str], test_mode: bool = False, test_limit: int = 5) -> Dict[str, Any]:
         """Scrape Thingiverse for accessibility products"""
         scraper = ThingiverseScraper(self.supabase, access_token)
-        # Load persisted search terms if available (normalized: one row per search term)
+        # Load persisted search terms if available (single row with search_terms array)
         try:
-            response = self.supabase.table("scraper_search_terms").select("search_term").eq("platform", "thingiverse").execute()
-            if response.data and len(response.data) > 0:
-                terms = [row.get("search_term") for row in response.data if row.get("search_term")]
-                if terms:
-                    scraper.SEARCH_TERMS = terms
+            response = self.supabase.table("scraper_search_terms").select("search_terms").eq("platform", "thingiverse").limit(1).execute()
+            terms = (response.data or [{}])[0].get("search_terms") if response.data else None
+            if isinstance(terms, list) and terms:
+                scraper.SEARCH_TERMS = terms
         except Exception:
             pass
         try:
@@ -92,13 +91,12 @@ class ScraperService:
     async def scrape_ravelry(self, access_token: str, test_mode: bool = False, test_limit: int = 5) -> Dict[str, Any]:
         """Scrape Ravelry for accessibility patterns"""
         scraper = RavelryScraper(self.supabase, access_token)
-        # Load persisted PA categories if available (normalized: one row per category)
+        # Load persisted PA categories if available (single row with search_terms array)
         try:
-            response = self.supabase.table("scraper_search_terms").select("search_term").eq("platform", "ravelry").execute()
-            if response.data and len(response.data) > 0:
-                cats = [row.get("search_term") for row in response.data if row.get("search_term")]
-                if cats:
-                    scraper.PA_CATEGORIES = cats
+            response = self.supabase.table("scraper_search_terms").select("search_terms").eq("platform", "ravelry_pa_categories").limit(1).execute()
+            cats = (response.data or [{}])[0].get("search_terms") if response.data else None
+            if isinstance(cats, list) and cats:
+                scraper.PA_CATEGORIES = cats
         except Exception:
             pass
         try:
@@ -123,11 +121,10 @@ class ScraperService:
         scraper = GitHubScraper(self.supabase, access_token=token)
         # Load persisted search terms if available (normalized: one row per term)
         try:
-            response = self.supabase.table("scraper_search_terms").select("search_term").eq("platform", "github").execute()
-            if response.data and len(response.data) > 0:
-                terms = [row.get("search_term") for row in response.data if row.get("search_term")]
-                if terms:
-                    scraper.SEARCH_TERMS = terms
+            response = self.supabase.table("scraper_search_terms").select("search_terms").eq("platform", "github").limit(1).execute()
+            terms = (response.data or [{}])[0].get("search_terms") if response.data else None
+            if isinstance(terms, list) and terms:
+                scraper.SEARCH_TERMS = terms
         except Exception:
             # If DB read fails, continue with default in-memory terms
             pass

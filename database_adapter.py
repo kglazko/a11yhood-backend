@@ -248,15 +248,11 @@ class SupportedSource(Base):
 class ScraperSearchTerms(Base):
     __tablename__ = "scraper_search_terms"
 
-    id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
-    platform = Column(String, nullable=False)
-    search_term = Column(String, nullable=False)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    platform = Column(String, nullable=False, unique=True)
+    search_terms = Column(JSON, nullable=False, default=list)
     created_at = Column(DateTime, default=utcnow_naive)
     updated_at = Column(DateTime, default=utcnow_naive, onupdate=utcnow_naive)
-    
-    __table_args__ = (
-        UniqueConstraint('platform', 'search_term', name='scraper_search_terms_platform_term_key'),
-    )
 
 
 class DatabaseAdapter:

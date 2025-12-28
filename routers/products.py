@@ -39,14 +39,25 @@ async def get_product_sources(
     """Get all unique source values from products table.
     
     Returns a sorted list of distinct sources for filter UI.
+    Uses supported_sources as the canonical list so options are stable
+    regardless of current search filters.
     """
     try:
-        response = db.table("products").select("source").execute()
+        # Prefer canonical supported_sources table so UI always has full list.
+        response = db.table("supported_sources").select("name").execute()
         sources = {
-            row["source"].strip()
+            row["name"].strip()
             for row in (response.data or [])
-            if row.get("source") and row.get("source").strip()
+            if row.get("name") and row.get("name").strip()
         }
+        # Fallback to distinct product sources if the table is empty/missing.
+        if not sources:
+            product_sources = db.table("products").select("source").execute()
+            sources = {
+                row["source"].strip()
+                for row in (product_sources.data or [])
+                if row.get("source") and row.get("source").strip()
+            }
         return {"sources": sorted(sources)}
     except Exception:
         return {"sources": []}
@@ -102,9 +113,16 @@ def build_display_rating_map(db, products: list[dict]) -> dict[str, dict]:
     if not product_ids:
         return {}
 
-    ratings_response = db.table("ratings").select("product_id,rating").in_("product_id", product_ids).execute()
+    # Chunk rating lookups to avoid oversize PostgREST queries when many products are present.
+    ratings_rows: list[dict] = []
+    chunk_size = 200
+    for i in range(0, len(product_ids), chunk_size):
+        chunk = product_ids[i:i + chunk_size]
+        resp = db.table("ratings").select("product_id,rating").in_("product_id", chunk).execute()
+        ratings_rows.extend(resp.data or [])
+
     aggregates: dict[str, dict[str, float | int]] = {}
-    for row in ratings_response.data or []:
+    for row in ratings_rows:
         pid = row.get("product_id")
         rating_raw = row.get("rating")
         rating_val = _safe_float(rating_raw)
@@ -156,10 +174,21 @@ async def get_product_types(
     """Get all unique type values from products table.
     
     Returns a sorted list of distinct types for filter UI.
+    Uses valid_categories as the canonical list so options stay stable
+    regardless of current search filters.
     """
     try:
-        response = db.table("products").select("type").execute()
-        types = {row["type"] for row in (response.data or []) if row.get("type")}
+        # Prefer canonical valid_categories table.
+        response = db.table("valid_categories").select("category").execute()
+        types = {
+            row["category"].strip()
+            for row in (response.data or [])
+            if row.get("category") and row.get("category").strip()
+        }
+        # Fallback to distinct product types if table is empty/missing.
+        if not types:
+            product_types = db.table("products").select("type").execute()
+            types = {row["type"] for row in (product_types.data or []) if row.get("type")}
         return {"types": sorted(types)}
     except Exception as e:
         return {"types": []}
@@ -368,9 +397,12 @@ async def count_products(
     if not include_banned:
         products = [p for p in products if not p.get("banned")]
 
+    # If no rating filter is requested, skip rating lookups to avoid heavy IN queries.
+    if min_rating is None:
+        return {"count": len(products)}
+
     ratings_map = build_display_rating_map(db, products)
-    if min_rating is not None:
-        products = [p for p in products if rating_meets_threshold(p, ratings_map, min_rating)]
+    products = [p for p in products if rating_meets_threshold(p, ratings_map, min_rating)]
     
     return {"count": len(products)}
 
