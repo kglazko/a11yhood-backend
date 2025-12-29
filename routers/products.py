@@ -4,9 +4,11 @@ Handles CRUD operations for products with ownership tracking via product_editors
 Supports URL-based upsert for scrapers and tag management via relationship tables.
 Security: Mutations require authentication; updates/deletes enforce ownership or admin role.
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from typing import Optional, Iterable
 from datetime import datetime, UTC
+
+from pydantic import BaseModel
 
 from models.products import ProductCreate, ProductUpdate, ProductResponse
 from services.database import get_db
@@ -72,6 +74,11 @@ def _canonicalize_source_value_db(db, value: Optional[str]) -> Optional[str]:
     key = str(value).strip().lower()
     name_map = _get_supported_source_name_map(db)
     return name_map.get(key, value)
+
+
+class BulkDeleteRequest(BaseModel):
+    source: Optional[str] = None
+    product_ids: Optional[list[str]] = None
 
 
 @router.get("/sources")
@@ -933,7 +940,7 @@ async def patch_product(
     return result
 
 
-@router.delete("/{product_id}", status_code=200)
+@router.delete("/{product_id}", status_code=204)
 async def delete_product(
     product_id: str,
     current_user: dict = Depends(get_current_user),
@@ -968,13 +975,8 @@ async def delete_product(
     # Just delete the product - CASCADE should handle the rest
     try:
         print(f"[Delete] Deleting product {product_id}")
-        response = db.table("products").delete().eq("id", product_id).execute()
-        print(f"[Delete] Success, deleted {len(response.data or [])} rows")
-        return {
-            "deleted": True,
-            "message": "Product deleted successfully",
-            "product_id": product_id
-        }
+        db.table("products").delete().eq("id", product_id).execute()
+        print(f"[Delete] Success")
     except Exception as e:
         print(f"[Delete] Failed: {e}")
         raise HTTPException(
@@ -987,6 +989,7 @@ async def delete_product(
 async def bulk_delete_products(
     source: Optional[str] = Query(None, description="Delete all products from this source"),
     product_ids: Optional[list[str]] = Query(None, description="Specific product IDs to delete"),
+    payload: Optional[BulkDeleteRequest] = Body(None, description="Optional JSON body mirroring query params"),
     current_user: dict = Depends(get_current_user),
     db = Depends(get_db),
 ):
@@ -1010,15 +1013,22 @@ async def bulk_delete_products(
             detail=f"Admin access required. Your current role: {current_user.get('role', 'user')}"
         )
     
-    if not source and not product_ids:
+    # Accept values from query params or JSON body for flexibility with callers
+    payload_source = payload.source if payload else None
+    payload_product_ids = payload.product_ids if payload else None
+
+    source_value = source or payload_source
+    normalized_product_ids = _normalize_list(product_ids) or _normalize_list(payload_product_ids)
+
+    if not source_value and not normalized_product_ids:
         raise HTTPException(
             status_code=400,
-            detail="Must provide either 'source' or 'product_ids' parameter"
+            detail="Must provide either 'source' or 'product_ids' parameter (query or JSON body)"
         )
     
     try:
         # Canonicalize provided source to match supported_sources capitalization
-        canonical_source = _canonicalize_source_value_db(db, source) if source else None
+        canonical_source = _canonicalize_source_value_db(db, source_value) if source_value else None
 
         # Build query to find products to delete
         if canonical_source:
@@ -1026,17 +1036,25 @@ async def bulk_delete_products(
             products_query = db.table("products").select("id").eq("source", canonical_source)
         else:
             # Find specific products by ID
-            products_query = db.table("products").select("id").in_("id", product_ids)
+            products_query = db.table("products").select("id").in_("id", normalized_product_ids)
         
         products_to_delete = products_query.execute()
         
         if not products_to_delete.data:
             return {"deleted_count": 0, "message": "No products found matching criteria"}
         
-        ids_to_delete = [p["id"] for p in products_to_delete.data]
+        # Deduplicate IDs to avoid redundant delete calls
+        ids_to_delete = list(dict.fromkeys(p["id"] for p in products_to_delete.data))
         
-        # Delete the products - CASCADE will handle related data
-        db.table("products").delete().in_("id", ids_to_delete).execute()
+        # Delete the products - CASCADE will handle related data. Use minimal return
+        # payload to avoid PostgREST JSON generation on deleted rows (e.g., NaN fields).
+        products_table = db.table("products")
+        delete_query = (
+            products_table.delete(returning="minimal")
+            if getattr(db, "backend", None) == "supabase"
+            else products_table.delete()
+        )
+        delete_query.in_("id", ids_to_delete).execute()
         
         return {
             "deleted_count": len(ids_to_delete),

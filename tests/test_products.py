@@ -454,6 +454,78 @@ def test_delete_product_admin_success(admin_client, test_product):
     assert response.status_code == 204
 
 
+def test_bulk_delete_requires_admin(auth_client):
+    resp = auth_client.post("/api/products/bulk-delete?source=Github")
+    assert resp.status_code == 403
+
+
+def test_bulk_delete_requires_params(admin_client):
+    resp = admin_client.post("/api/products/bulk-delete")
+    assert resp.status_code == 400
+    assert "Must provide either" in resp.json()["detail"]
+
+
+def test_bulk_delete_by_source_query_param(admin_client, clean_database):
+    # Insert products under a unique source to isolate the deletion scope
+    source_name = "BulkSource"
+    p1_id = str(uuid.uuid4())
+    p2_id = str(uuid.uuid4())
+    keep_id = str(uuid.uuid4())
+
+    clean_database.table("products").insert([
+        {"id": p1_id, "name": "Bulk A", "source": source_name, "url": f"https://example.com/{p1_id}"},
+        {"id": p2_id, "name": "Bulk B", "source": source_name, "url": f"https://example.com/{p2_id}"},
+        {"id": keep_id, "name": "Keep", "source": "Other", "url": f"https://example.com/{keep_id}"},
+    ]).execute()
+
+    resp = admin_client.post(f"/api/products/bulk-delete?source={source_name}")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["deleted_count"] == 2
+
+    remaining_bulk = clean_database.table("products").select("id").eq("source", source_name).execute()
+    assert remaining_bulk.data == []
+
+    keep_row = clean_database.table("products").select("id").eq("id", keep_id).execute()
+    assert keep_row.data != []
+
+
+def test_bulk_delete_accepts_json_body(admin_client, clean_database):
+    source_name = "JsonSource"
+    ids = [str(uuid.uuid4()) for _ in range(2)]
+    clean_database.table("products").insert([
+        {"id": ids[0], "name": "JSON A", "source": source_name, "url": f"https://example.com/{ids[0]}"},
+        {"id": ids[1], "name": "JSON B", "source": source_name, "url": f"https://example.com/{ids[1]}"},
+    ]).execute()
+
+    resp = admin_client.post("/api/products/bulk-delete", json={"source": source_name})
+    assert resp.status_code == 200
+    assert resp.json()["deleted_count"] == 2
+
+
+def test_bulk_delete_by_product_ids_dedupes(admin_client, clean_database):
+    ids = [str(uuid.uuid4()) for _ in range(3)]
+    for pid in ids:
+        clean_database.table("products").insert({
+            "id": pid,
+            "name": f"Target {pid[:8]}",
+            "source": "DedupSource",
+            "url": f"https://example.com/{pid}",
+        }).execute()
+
+    resp = admin_client.post(
+        "/api/products/bulk-delete",
+        json={"product_ids": [ids[0], ids[1], ids[1]]},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["deleted_count"] == 2  # duplicate ID should not double count
+
+    remaining = clean_database.table("products").select("id").in_("id", ids).execute()
+    remaining_ids = {row["id"] for row in (remaining.data or [])}
+    assert remaining_ids == {ids[2]}  # Only the untouched ID should remain
+
+
 # ============================================================================
 # TESTS FOR STORY 3.1 & 3.4: PRODUCT SUBMISSION WITH URL CHECK
 # ============================================================================
