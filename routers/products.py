@@ -5,11 +5,13 @@ Supports URL-based upsert for scrapers and tag management via relationship table
 Security: Mutations require authentication; updates/deletes enforce ownership or admin role.
 """
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
-from typing import Optional, Iterable
+from typing import Optional, Iterable, Callable
 from datetime import datetime, UTC
+import httpx
 
 from pydantic import BaseModel
 
+from config import settings
 from models.products import ProductCreate, ProductUpdate, ProductResponse
 from services.database import get_db
 from services.auth import get_current_user, get_current_user_optional
@@ -1030,35 +1032,84 @@ async def bulk_delete_products(
         # Canonicalize provided source to match supported_sources capitalization
         canonical_source = _canonicalize_source_value_db(db, source_value) if source_value else None
 
-        # Build query to find products to delete
-        if canonical_source:
-            # Find all products from this source
-            products_query = db.table("products").select("id").eq("source", canonical_source)
+        def _supabase_query_factory() -> Callable[[], any]:
+            if canonical_source:
+                return lambda: db.supabase.table("products").select("id").eq("source", canonical_source)
+            return lambda: db.supabase.table("products").select("id").in_("id", normalized_product_ids)
+
+        def _sqlite_query():
+            if canonical_source:
+                return db.table("products").select("id").eq("source", canonical_source)
+            return db.table("products").select("id").in_("id", normalized_product_ids)
+
+        def _fetch_ids_supabase() -> list[str]:
+            # Paginate to avoid 206 partial responses and limits
+            ids: list[str] = []
+            page_size = 500
+            offset = 0
+            query_factory = _supabase_query_factory()
+            while True:
+                resp = query_factory().range(offset, offset + page_size - 1).execute()
+                rows = resp.data or []
+                if not rows:
+                    break
+                ids.extend([row["id"] for row in rows if row.get("id")])
+                if len(rows) < page_size:
+                    break
+                offset += page_size
+            return ids
+
+        def _fetch_ids_sqlite() -> list[str]:
+            resp = _sqlite_query().execute()
+            return [row["id"] for row in (resp.data or []) if row.get("id")]
+
+        if getattr(db, "backend", None) == "supabase":
+            ids_to_delete = list(dict.fromkeys(_fetch_ids_supabase()))
         else:
-            # Find specific products by ID
-            products_query = db.table("products").select("id").in_("id", normalized_product_ids)
-        
-        products_to_delete = products_query.execute()
-        
-        if not products_to_delete.data:
+            ids_to_delete = list(dict.fromkeys(_fetch_ids_sqlite()))
+
+        if not ids_to_delete:
             return {"deleted_count": 0, "message": "No products found matching criteria"}
-        
-        # Deduplicate IDs to avoid redundant delete calls
-        ids_to_delete = list(dict.fromkeys(p["id"] for p in products_to_delete.data))
-        
+
         print(f"[Bulk Delete] About to delete {len(ids_to_delete)} products: {ids_to_delete[:5]}...")
         print(f"[Bulk Delete] Backend type: {getattr(db, 'backend', 'unknown')}")
-        
-        # Delete the products - CASCADE will handle related data
-        result = db.table("products").delete().in_("id", ids_to_delete).execute()
-        print(f"[Bulk Delete] Delete result: {result}")
-        
+
+        async def _delete_supabase(ids: list[str]) -> int:
+            # Use REST endpoint with Prefer:return=minimal to avoid JSON serialization errors
+            headers = {
+                "apikey": settings.SUPABASE_KEY,
+                "Authorization": f"Bearer {settings.SUPABASE_KEY}",
+                "Prefer": "return=minimal",
+            }
+            deleted = 0
+            chunk_size = 200
+            async with httpx.AsyncClient(base_url=settings.SUPABASE_URL, timeout=30) as client:
+                for i in range(0, len(ids), chunk_size):
+                    chunk = ids[i:i + chunk_size]
+                    params = {"id": f"in.({','.join(chunk)})"}
+                    resp = await client.delete("/rest/v1/products", params=params, headers=headers)
+                    if resp.status_code not in (200, 204):
+                        print(
+                            f"[Bulk Delete] Supabase chunk delete failed: status={resp.status_code}, body={resp.text[:400]}"
+                        )
+                        raise HTTPException(status_code=500, detail="Failed to delete products in Supabase")
+                    deleted += len(chunk)
+            return deleted
+
+        if getattr(db, "backend", None) == "supabase":
+            await _delete_supabase(ids_to_delete)
+        else:
+            db.table("products").delete().in_("id", ids_to_delete).execute()
+
+        print(f"[Bulk Delete] Delete completed for {len(ids_to_delete)} IDs")
+
         return {
             "deleted_count": len(ids_to_delete),
             "message": f"Successfully deleted {len(ids_to_delete)} product(s)",
             "source": canonical_source if canonical_source else None
         }
     except Exception as e:
+        print(f"[Bulk Delete] Failed: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete products: {str(e)}"
