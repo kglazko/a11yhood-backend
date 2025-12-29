@@ -117,10 +117,24 @@ echo ""
 
 # Build production image
 echo -e "${YELLOW}🔨 Building production Docker image...${NC} (t=$(ts))"
-if docker compose build backend-prod 2>&1 | grep -q "Successfully built\|Image.*Built"; then
+if docker compose build backend-prod 2>/tmp/build.out; then
   echo -e "${GREEN}✓ Image ready${NC}"
 else
-  echo -e "${YELLOW}⚠️  Build completed with warnings (check output if needed)${NC}"
+  echo -e "${YELLOW}⚠️  Build failed, retrying with legacy builder...${NC}"
+  if DOCKER_BUILDKIT=0 docker compose build backend-prod 2>/tmp/build_legacy.out; then
+    echo -e "${GREEN}✓ Image ready (legacy builder)${NC}"
+  else
+    echo -e "${RED}✗ Build failed with both builders${NC}"
+    echo "  Consider building the image on another machine and transferring it:"
+    echo "    # On your dev machine"
+    echo "    docker build --target production -t a11yhood-backend:prod ."
+    echo "    docker save a11yhood-backend:prod -o a11yhood-backend-prod.tar"
+    echo "    scp a11yhood-backend-prod.tar user@server:/tmp/"
+    echo "    # On the server"
+    echo "    docker load -i /tmp/a11yhood-backend-prod.tar"
+    echo "    docker compose --profile production up -d --no-build backend-prod"
+    exit 1
+  fi
 fi
 echo ""
 
