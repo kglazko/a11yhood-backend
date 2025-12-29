@@ -124,7 +124,7 @@ class ThingiverseScraper(BaseScraper):
             for term in self.SEARCH_TERMS:
                 if test_mode and products_found >= test_limit:
                     break
-                
+
                 things = await self._search_things(term)
                 print(f"[Thingiverse] term='{term}' hits={len(things)}")
                 # Debug: list hits returned for this term
@@ -151,6 +151,9 @@ class ThingiverseScraper(BaseScraper):
                     url = thing_details.get('public_url') or f"https://www.thingiverse.com/thing:{thing['id']}"
                     existing = await self._product_exists(url)
                     print(f"[Thingiverse] Exists? {bool(existing)} url={url}")
+
+                    # Count this processed item for test-mode limiting
+                    products_found += 1
 
                     if existing:
                         # Update existing product
@@ -346,25 +349,32 @@ class ThingiverseScraper(BaseScraper):
         
         url = thing.get('public_url') or f"https://www.thingiverse.com/thing:{thing['id']}"
         
-        # Try to get rating data; fall back to likes as a proxy for popularity
-        rating = thing.get('rating')
-        rating_count = thing.get('rating_count')
-        
-        # If no rating data, use likes/favorites as popularity metric
-        if not rating_count:
-            likes = thing.get('like_count', 0)
-            favorites = thing.get('favorite_count', 0)
-            popularity_count = max(likes, favorites, 0)
-            # Convert popularity to a simple score: 1-5 based on count
-            if popularity_count >= 50:
-                rating = 5.0
-            elif popularity_count >= 20:
-                rating = 4.0
-            elif popularity_count >= 5:
-                rating = 3.0
-            elif popularity_count > 0:
-                rating = 2.0
-            rating_count = popularity_count if popularity_count > 0 else None
+        # Use "makes" as the popularity signal (Thingiverse hearts aren't capped and don't map to stars)
+        makes_raw = (
+            thing.get('make_count')
+            or thing.get('makes')
+            or thing.get('makes_count')
+            or thing.get('made_count')
+            or 0
+        )
+        try:
+            makes = int(makes_raw) if makes_raw is not None else 0
+        except (TypeError, ValueError):
+            makes = 0
+
+        # Map makes -> 1-5 star rating (5*: >=1000, 4*: >=100, 3*: >=50, 2*: >=10, 1*: >=1)
+        rating = None
+        if makes >= 1000:
+            rating = 5.0
+        elif makes >= 100:
+            rating = 4.0
+        elif makes >= 50:
+            rating = 3.0
+        elif makes >= 10:
+            rating = 2.0
+        elif makes >= 1:
+            rating = 1.0
+        rating_count = makes if makes > 0 else None
         
         # Determine type based on thing properties (default to 3D Printed)
         product_type = 'Fabrication'
@@ -400,6 +410,7 @@ class ThingiverseScraper(BaseScraper):
                 'rating': rating,
                 'rating_count': rating_count,
                 'stars': rating_count or 0,
+                'make_count': makes,
                 'likes': thing.get('like_count', 0),
                 'favorites': thing.get('favorite_count', 0),
                 'categories': [cat.get('name') for cat in thing.get('categories', [])],
