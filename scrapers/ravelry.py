@@ -81,12 +81,18 @@ class RavelryScraper(BaseScraper):
         return {
             Dict with scraping results (products_found, products_added, etc.)
         """
+        # Initialize test-mode session for global item capping
+        self._begin_test_session(test_mode, test_limit)
+
         if not self.access_token:
             raise ValueError("Ravelry access token is required")
         start_time = datetime.now(UTC)
         products_found = 0
         products_added = 0
         products_updated = 0
+        print(
+            f"[Ravelry] Starting scrape test_mode={test_mode} test_limit={test_limit} token_len={len(self.access_token) if self.access_token else 0}"
+        )
         
         try:
             for pa_category in self.PA_CATEGORIES:
@@ -96,10 +102,18 @@ class RavelryScraper(BaseScraper):
                 category_count = 0
                 pages_seen = 0
 
-                async for patterns in self._paginate(lambda page: self._search_patterns(pa_category, page)):
+                print(f"[Ravelry] Category='{pa_category}' starting pagination")
+                async for patterns in self._paginate(lambda page: self._search_patterns(pa_category, page), respect_test_limit=True):
                     pages_seen += 1
                     if test_mode and products_found >= test_limit:
                         break
+
+                    if test_mode:
+                        remaining = max(test_limit - products_found, 0)
+                        if remaining <= 0:
+                            break
+                        if len(patterns) > remaining:
+                            patterns = patterns[:remaining]
 
                     for pattern in patterns:
                         if test_mode and products_found >= test_limit:
@@ -162,6 +176,7 @@ class RavelryScraper(BaseScraper):
         Returns a tuple of (patterns, has_more).
         """
         url = f"{self.API_BASE_URL}/patterns/search.json"
+        # Use both 'pa' (UI-style) and 'personal_attributes' (API-style) to be safe
         params = {
             'pa': pa_category,
             'page_size': self.RESULTS_PER_PAGE,
@@ -169,7 +184,10 @@ class RavelryScraper(BaseScraper):
             'sort': 'best',
         }
         try:
+            print(f"[Ravelry] GET {url} params={params}")
             data = await self._get_with_refresh(url, params)
+            if isinstance(data, dict):
+                print(f"[Ravelry] Response keys page={page}: {list(data.keys())[:8]}")
             patterns = data.get('patterns', [])
             if not patterns and page == 1:
                 print(f"[Ravelry] No results for category '{pa_category}' (page 1)")
@@ -195,14 +213,17 @@ class RavelryScraper(BaseScraper):
         for attempt in (1, 2):
             await self._throttle_request()
             response = await self.client.get(url, params=params)
+            print(f"[Ravelry] HTTP attempt={attempt} status={response.status_code} url={url}")
             try:
                 response.raise_for_status()
                 return response.json()
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code
                 if attempt == 1 and status in (401, 403):
+                    print(f"[Ravelry] Auth status={status}; attempting token refresh...")
                     refreshed = await self._refresh_access_token()
                     if refreshed:
+                        print("[Ravelry] Token refreshed; retrying...")
                         continue
                 raise
 
