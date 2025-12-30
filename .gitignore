@@ -70,3 +70,6 @@ build/
 
 # Misc
 .devcontainer/
+
+# Local helper scripts (not tracked)
+deploy-prod-image.sh

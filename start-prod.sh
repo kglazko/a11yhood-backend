@@ -23,11 +23,16 @@ ts() {
 
 # Parse arguments
 HELP=false
+NO_BUILD=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
     --help)
       HELP=true
+      shift
+      ;;
+    --no-build)
+      NO_BUILD=true
       shift
       ;;
     *)
@@ -51,6 +56,7 @@ if [ "$HELP" = true ]; then
   echo ""
   echo "Options:"
   echo "  --help       Show this help message"
+   echo "  --no-build   Skip image build (use when image is already loaded)"
   echo ""
   echo "See documentation/DEPLOYMENT_PLAN.md for detailed setup instructions"
   exit 0
@@ -115,28 +121,37 @@ echo "   OAuth enabled (real authentication)"
 echo "   DO NOT seed or reset production database"
 echo ""
 
-# Build production image
-echo -e "${YELLOW}🔨 Building production Docker image...${NC} (t=$(ts))"
-if docker compose build backend-prod 2>/tmp/build.out; then
-  echo -e "${GREEN}✓ Image ready${NC}"
-else
-  echo -e "${YELLOW}⚠️  Build failed, retrying with legacy builder...${NC}"
-  if DOCKER_BUILDKIT=0 docker compose build backend-prod 2>/tmp/build_legacy.out; then
-    echo -e "${GREEN}✓ Image ready (legacy builder)${NC}"
+if [ "$NO_BUILD" = false ]; then
+  echo -e "${YELLOW}🔨 Building production Docker image...${NC} (t=$(ts))"
+  if docker compose build backend-prod 2>/tmp/build.out; then
+    echo -e "${GREEN}✓ Image ready${NC}"
   else
-    echo -e "${RED}✗ Build failed with both builders${NC}"
-    echo "  Consider building the image on another machine and transferring it:"
-    echo "    # On your dev machine"
-    echo "    docker build --target production -t a11yhood-backend:prod ."
-    echo "    docker save a11yhood-backend:prod -o a11yhood-backend-prod.tar"
-    echo "    scp a11yhood-backend-prod.tar user@server:/tmp/"
-    echo "    # On the server"
-    echo "    docker load -i /tmp/a11yhood-backend-prod.tar"
-    echo "    docker compose --profile production up -d --no-build backend-prod"
-    exit 1
+    echo -e "${YELLOW}⚠️  Build failed, retrying with legacy builder...${NC}"
+    if DOCKER_BUILDKIT=0 docker compose build backend-prod 2>/tmp/build_legacy.out; then
+      echo -e "${GREEN}✓ Image ready (legacy builder)${NC}"
+    else
+      echo -e "${RED}✗ Build failed with both builders${NC}"
+      echo "  Consider building the image on another machine and transferring it:"
+      echo "    # On your dev machine"
+      echo "    docker build --target production -t a11yhood-backend:prod ."
+      echo "    docker save a11yhood-backend:prod -o a11yhood-backend-prod.tar"
+      echo "    scp a11yhood-backend-prod.tar user@server:/tmp/"
+      echo "    # On the server"
+      echo "    docker load -i /tmp/a11yhood-backend-prod.tar"
+      echo "    docker compose --profile production up -d --no-build backend-prod"
+      echo ""
+      echo "  Build logs (first attempt):"
+      tail -n 30 /tmp/build.out 2>/dev/null || true
+      echo ""
+      echo "  Build logs (legacy attempt):"
+      tail -n 30 /tmp/build_legacy.out 2>/dev/null || true
+      exit 1
+    fi
   fi
+  echo ""
+else
+  echo -e "${YELLOW}⏭️  Skipping build (--no-build)${NC}"
 fi
-echo ""
 
 # Start production container
 echo -e "${GREEN}🚀 Starting production container...${NC} (t=$(ts))"
