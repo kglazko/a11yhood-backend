@@ -310,26 +310,50 @@ async def get_product_types(
 @router.get("/tags")
 async def get_popular_tags(
     limit: int = Query(10, le=50),
+    min_products: int = Query(1, ge=1, description="Minimum number of products a tag must have to be included"),
     db = Depends(get_db),
 ):
     """Get most popular tags from products.
     
-    Returns tags ordered by frequency, limited to specified count.
-    Uses product_tags relationship table to count tag usage.
+    Returns tags ordered by frequency (most used first), limited to specified count.
+    Only includes tags used on at least min_products products to filter out noise.
+    
+    Best practices:
+    - Filters out rarely-used tags to show meaningful categories
+    - Orders by usage frequency to prioritize widely-applicable tags
+    - Configurable limit and minimum threshold for different UIs
     """
     try:
-        # Get all product_tags relationships
-        response = db.table("product_tags").select("tag").execute()
-        tag_list = [row["tag"] for row in (response.data or []) if row.get("tag")]
+        from collections import Counter
+        
+        # Get all product-tag relationships
+        pt_response = db.table("product_tags").select("tag_id").execute()
+        tag_ids = [row["tag_id"] for row in (pt_response.data or []) if row.get("tag_id")]
+        
+        if not tag_ids:
+            return {"tags": []}
         
         # Count tag frequencies
-        from collections import Counter
-        tag_counts = Counter(tag_list)
+        tag_counts = Counter(tag_ids)
         
-        # Get top N most common tags
-        popular_tags = [tag for tag, count in tag_counts.most_common(limit)]
+        # Filter by minimum usage and get top N
+        filtered_counts = {tag_id: count for tag_id, count in tag_counts.items() if count >= min_products}
+        top_tag_ids = [tag_id for tag_id, count in sorted(filtered_counts.items(), key=lambda x: x[1], reverse=True)[:limit]]
+        
+        if not top_tag_ids:
+            return {"tags": []}
+        
+        # Fetch tag names for top tags
+        tags_response = db.table("tags").select("id,name").in_("id", top_tag_ids).execute()
+        id_to_name = {row["id"]: row["name"] for row in (tags_response.data or [])}
+        
+        # Return in frequency order
+        popular_tags = [id_to_name[tag_id] for tag_id in top_tag_ids if tag_id in id_to_name]
         return {"tags": popular_tags}
+        
     except Exception as e:
+        # Log error but return empty list to avoid breaking frontend
+        print(f"Error fetching popular tags: {e}")
         return {"tags": []}
 
 
@@ -345,6 +369,7 @@ async def get_products(
     search: Optional[str] = None,
     created_by: Optional[str] = None,
     include_banned: bool = Query(False, description="Include banned products (admin/mod only)"),
+    include_ratings: bool = Query(False, description="Include rating data (average_rating, rating_count, display_rating). Set to true only when displaying ratings."),
     limit: int = Query(50, le=100),
     offset: int = Query(0, ge=0),
     current_user: Optional[dict] = Depends(get_current_user_optional),
@@ -410,7 +435,11 @@ async def get_products(
     # Collect product IDs
     products = response.data or []
 
-    ratings_map = build_display_rating_map(db, products)
+    # Only fetch ratings when needed for filtering OR when explicitly requested
+    ratings_map = {}
+    if min_rating is not None or include_ratings:
+        ratings_map = build_display_rating_map(db, products)
+    
     if min_rating is not None:
         products = [p for p in products if rating_meets_threshold(p, ratings_map, min_rating)]
         products = products[offset:offset + limit]
@@ -439,23 +468,35 @@ async def get_products(
             if tname:
                 tags_by_product.setdefault(pid, []).append(tname)
 
+    # Fetch supported_sources map once (not once per product!)
+    source_name_map = _get_supported_source_name_map(db)
+
     # Normalize fields and attach tags
     normalized = []
     for item in products:
         # Add top-level stars derived from source_rating_count
         item["stars"] = item.get("source_rating_count") or 0
-        rating_info = ratings_map.get(item["id"], {})
-        item["average_rating"] = rating_info.get("average_rating")
-        item["rating_count"] = rating_info.get("rating_count", item.get("rating_count") or 0)
-        item["display_rating"] = rating_info.get("display_rating")
+        
+        # Only compute rating fields if we fetched ratings
+        if ratings_map:
+            rating_info = ratings_map.get(item["id"], {})
+            item["average_rating"] = rating_info.get("average_rating")
+            item["rating_count"] = rating_info.get("rating_count", item.get("rating_count") or 0)
+            item["display_rating"] = rating_info.get("display_rating")
+        else:
+            # Set defaults when ratings not fetched (performance optimization)
+            item["average_rating"] = None
+            item["rating_count"] = 0
+            item["display_rating"] = None
         # Normalize fields for API clients
         if "image" in item:
             item["image_url"] = item.get("image")
         if "url" in item:
             item["source_url"] = item.get("url")
-        # Ensure canonical source display names using supported_sources
+        # Ensure canonical source display names using supported_sources (use pre-fetched map)
         if "source" in item and item.get("source"):
-            item["source"] = _canonicalize_source_value_db(db, item.get("source"))
+            source_key = str(item.get("source")).strip().lower()
+            item["source"] = source_name_map.get(source_key, item.get("source"))
         item["tags"] = tags_by_product.get(item["id"], [])
         item["editor_ids"] = owners_by_product.get(item["id"], [])
         normalized.append(item)
