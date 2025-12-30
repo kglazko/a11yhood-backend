@@ -70,15 +70,22 @@ if ! docker info >/dev/null 2>&1; then
   exit 1
 fi
 
-# Ensure Docker Compose v2 plugin is available
-if ! docker compose version >/dev/null 2>&1; then
-  echo -e "${RED}✗ Docker Compose v2 plugin (docker compose) not found${NC}"
-  echo "  Install the Compose v2 plugin or use plain Docker script:"
-  echo "    - macOS: Use Docker Desktop (includes Compose v2)"
+# Determine which compose command is available
+COMPOSE_CMD=""
+if docker compose version >/dev/null 2>&1; then
+  COMPOSE_CMD="docker compose"
+elif docker-compose version >/dev/null 2>&1; then
+  COMPOSE_CMD="docker-compose"
+else
+  echo -e "${RED}✗ Docker Compose not found (tried 'docker compose' and 'docker-compose')${NC}"
+  echo "  Install Docker Compose or use plain Docker script:"
+  echo "    - macOS: brew install docker-compose"
   echo "    - Linux (Debian/Ubuntu): sudo apt-get install -y docker-compose-plugin"
   echo "    - Fallback: ./start-prod-plain.sh"
   exit 1
 fi
+
+echo "Using: $COMPOSE_CMD"
 
 echo -e "${BLUE}🚀 Starting a11yhood backend PRODUCTION server (Docker)...${NC} (t=0s)"
 echo ""
@@ -123,11 +130,11 @@ echo ""
 
 if [ "$NO_BUILD" = false ]; then
   echo -e "${YELLOW}🔨 Building production Docker image...${NC} (t=$(ts))"
-  if docker compose build backend-prod 2>/tmp/build.out; then
+  if $COMPOSE_CMD build backend-prod 2>/tmp/build.out; then
     echo -e "${GREEN}✓ Image ready${NC}"
   else
     echo -e "${YELLOW}⚠️  Build failed, retrying with legacy builder...${NC}"
-    if DOCKER_BUILDKIT=0 docker compose build backend-prod 2>/tmp/build_legacy.out; then
+    if DOCKER_BUILDKIT=0 $COMPOSE_CMD build backend-prod 2>/tmp/build_legacy.out; then
       echo -e "${GREEN}✓ Image ready (legacy builder)${NC}"
     else
       echo -e "${RED}✗ Build failed with both builders${NC}"
@@ -138,7 +145,7 @@ if [ "$NO_BUILD" = false ]; then
       echo "    scp a11yhood-backend-prod.tar user@server:/tmp/"
       echo "    # On the server"
       echo "    docker load -i /tmp/a11yhood-backend-prod.tar"
-      echo "    docker compose --profile production up -d --no-build backend-prod"
+      echo "    $COMPOSE_CMD --profile production up -d --no-build backend-prod"
       echo ""
       echo "  Build logs (first attempt):"
       tail -n 30 /tmp/build.out 2>/dev/null || true
@@ -166,7 +173,7 @@ if [ "$NO_BUILD" = true ]; then
   echo "   Using prebuilt image tag: a11yhood-backend:prod"
 fi
 
-docker compose "${COMPOSE_UP_ARGS[@]}"
+$COMPOSE_CMD "${COMPOSE_UP_ARGS[@]}"
 
 if [ $? -ne 0 ]; then
   echo -e "${RED}✗ Failed to start production container${NC}"
@@ -182,9 +189,9 @@ for i in {1..60}; do  # Production might take longer
   fi
   
   # Check if container is still running
-  if ! docker compose ps backend-prod | grep -q "Up"; then
+  if ! $COMPOSE_CMD ps backend-prod | grep -q "Up"; then
     echo -e "${RED}✗ Container is not running${NC}"
-    echo "  Check logs with: docker compose logs backend-prod"
+    echo "  Check logs with: $COMPOSE_CMD logs backend-prod"
     exit 1
   fi
   
@@ -205,8 +212,8 @@ done
 # Final check
 if ! curl -s http://localhost:8001/health >/dev/null 2>&1; then
   echo -e "${RED}✗ Server failed to start within 60 seconds${NC}"
-  echo "  Check logs with: docker compose logs backend-prod"
-  docker compose logs --tail=50 backend-prod
+  echo "  Check logs with: $COMPOSE_CMD logs backend-prod"
+  $COMPOSE_CMD logs --tail=50 backend-prod
   exit 1
 fi
 
@@ -220,7 +227,7 @@ echo -e "${BLUE}📚 API Documentation:${NC}"
 echo "   http://localhost:8001/docs"
 echo ""
 echo -e "${BLUE}💡 To monitor logs:${NC}"
-echo "   docker compose logs -f backend-prod"
+echo "   $COMPOSE_CMD logs -f backend-prod"
 echo ""
 echo -e "${BLUE}🛑 To stop the server:${NC}"
 echo "   ./stop-prod.sh"
@@ -228,5 +235,5 @@ echo ""
 echo -e "${YELLOW}⚠️  Remember:${NC}"
 echo "   - This is PRODUCTION mode with real authentication"
 echo "   - Never reset or seed the production database"
-echo "   - Monitor logs with: docker compose logs -f backend-prod"
+echo "   - Monitor logs with: $COMPOSE_CMD logs -f backend-prod"
 echo ""
