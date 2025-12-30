@@ -6,7 +6,7 @@ Security: Mutations require authentication; updates/deletes enforce ownership or
 """
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from typing import Optional, Iterable, Callable
-from datetime import datetime, UTC
+from datetime import datetime, UTC, timedelta
 import httpx
 
 from pydantic import BaseModel
@@ -314,6 +314,7 @@ async def get_tags(
     type: Optional[list[str]] = Query(None, alias="type", description="Filter tags by product type"),
     types: Optional[list[str]] = Query(None, description="Filter tags by product type"),
     search: Optional[str] = Query(None, description="Case-insensitive substring filter on product name"),
+    updated_since: Optional[str] = Query(None, description="Filter products updated at source since this date (ISO format)"),
     created_by: Optional[str] = None,
     include_banned: bool = Query(False, description="Include banned products (admin/mod only)"),
     tag_search: Optional[str] = Query(None, description="Case-insensitive substring filter on tag name"),
@@ -347,6 +348,9 @@ async def get_tags(
 
         if created_by:
             product_query = product_query.eq("created_by", created_by)
+        
+        if updated_since is not None:
+            product_query = product_query.gte("source_last_updated", updated_since)
 
         # Handle banned products
         if include_banned:
@@ -410,6 +414,7 @@ async def get_products(
     tags: Optional[list[str]] = Query(None, alias="tags", description="Filter products that have any of these tag names"),
     tags_mode: str = Query("or", pattern="^(?i)(or|and)$", description="Tag filter mode: or (default) or and"),
     min_rating: Optional[float] = Query(None, ge=0, le=5, description="Minimum display rating (user or source)"),
+    updated_since: Optional[str] = Query(None, description="Filter products updated at source since this date (ISO format)"),
     search: Optional[str] = None,
     created_by: Optional[str] = None,
     include_banned: bool = Query(False, description="Include banned products (admin/mod only)"),
@@ -461,6 +466,11 @@ async def get_products(
     else:
         # Filter banned products in SQL rather than Python for better performance
         query = query.eq("banned", False)
+    
+    # Filter by source update date (show products updated at source since this date)
+    if updated_since is not None:
+        print(f"DEBUG: Filtering products with updated_since={updated_since}")
+        query = query.gte("source_last_updated", updated_since)
 
     # Always apply ordering before range for consistent results
     query = query.order("created_at", desc=True)
@@ -478,6 +488,11 @@ async def get_products(
 
     # Collect product IDs
     products = response.data or []
+    
+    if updated_since is not None and products:
+        print(f"DEBUG: First 3 products returned with source_last_updated:")
+        for p in products[:3]:
+            print(f"  - {p.get('name')}: source_last_updated={p.get('source_last_updated')}")
 
     # Only fetch ratings when needed for filtering OR when explicitly requested
     ratings_map = {}
@@ -557,6 +572,7 @@ async def count_products(
     tags: Optional[list[str]] = Query(None, alias="tags", description="Filter products that have any of these tag names"),
     tags_mode: str = Query("or", pattern="^(?i)(or|and)$", description="Tag filter mode: or (default) or and"),
     min_rating: Optional[float] = Query(None, ge=0, le=5, description="Minimum display rating (user or source)"),
+    updated_since: Optional[str] = Query(None, description="Filter products updated at source since this date (ISO format)"),
     search: Optional[str] = None,
     created_by: Optional[str] = None,
     include_banned: bool = Query(False, description="Include banned products (admin/mod only)"),
@@ -606,6 +622,10 @@ async def count_products(
         # Filter banned products in SQL for better performance
         query = query.eq("banned", False)
     
+    # Filter by source update date (show products updated at source since this date)
+    if updated_since is not None:
+        query = query.gte("source_last_updated", updated_since)
+
     # For min_rating is None, request an exact count to avoid the 1000-row PostgREST cap.
     if min_rating is None:
         total = None
@@ -625,6 +645,8 @@ async def count_products(
                 count_query = count_query.eq("created_by", created_by)
             if not include_banned:
                 count_query = count_query.eq("banned", False)
+            if updated_since is not None:
+                count_query = count_query.gte("source_last_updated", updated_since)
 
             count_resp = count_query.execute()
             if getattr(count_resp, "count", None) is not None:

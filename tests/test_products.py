@@ -328,6 +328,100 @@ def test_get_products_filters_by_min_display_rating(client, clean_database, test
         assert item.get("display_rating") is not None
 
 
+def test_get_products_filters_by_max_age(client, clean_database, test_user):
+    """Test max_age filter shows only recently updated products from source"""
+    old_id = str(uuid.uuid4())
+    recent_id = str(uuid.uuid4())
+    
+    # Create old product (last updated from source 10 days ago)
+    old_time = (datetime.now(UTC) - timedelta(days=10)).isoformat()
+    clean_database.table("products").insert([
+        {
+            "id": old_id,
+            "name": "Old Product",
+            "description": "Product updated 10 days ago",
+            "source": "Github",
+            "type": "Software",
+            "url": "https://github.com/example/old",
+            "created_by": test_user["id"],
+            "source_last_updated": old_time,
+        },
+    ]).execute()
+    
+    # Create recent product (last updated from source 2 days ago)
+    recent_time = (datetime.now(UTC) - timedelta(days=2)).isoformat()
+    clean_database.table("products").insert([
+        {
+            "id": recent_id,
+            "name": "Recent Product",
+            "description": "Product updated 2 days ago",
+            "source": "Github",
+            "type": "Software",
+            "url": "https://github.com/example/recent",
+            "created_by": test_user["id"],
+            "source_last_updated": recent_time,
+        },
+    ]).execute()
+    
+    # Filter for products updated in last 5 days
+    resp = client.get("/api/products?max_age=5")
+    assert resp.status_code == 200
+    data = resp.json()
+    ids = {item["id"] for item in data}
+    assert recent_id in ids
+    assert old_id not in ids
+    
+    # Filter for products updated in last 15 days (should include both)
+    resp = client.get("/api/products?max_age=15")
+    assert resp.status_code == 200
+    data = resp.json()
+    ids = {item["id"] for item in data}
+    assert recent_id in ids
+    assert old_id in ids
+
+
+def test_count_products_respects_max_age(client, clean_database, test_user):
+    """Test /count respects max_age filter"""
+    old_id = str(uuid.uuid4())
+    recent_id = str(uuid.uuid4())
+    
+    old_time = (datetime.now(UTC) - timedelta(days=10)).isoformat()
+    recent_time = (datetime.now(UTC) - timedelta(days=2)).isoformat()
+    
+    clean_database.table("products").insert([
+        {
+            "id": old_id,
+            "name": "Old Product",
+            "source": "Github",
+            "type": "Software",
+            "url": "https://github.com/example/old-count",
+            "created_by": test_user["id"],
+            "source_last_updated": old_time,
+        },
+        {
+            "id": recent_id,
+            "name": "Recent Product",
+            "source": "Github",
+            "type": "Software",
+            "url": "https://github.com/example/recent-count",
+            "created_by": test_user["id"],
+            "source_last_updated": recent_time,
+        },
+    ]).execute()
+    
+    # Count with 5 day filter should only include recent
+    resp = client.get("/api/products/count?max_age=5")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] == 1
+    
+    # Count with 15 day filter should include both
+    resp = client.get("/api/products/count?max_age=15")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] == 2
+
+
 def test_count_products_respects_min_rating(client, clean_database, test_user):
     high_id = str(uuid.uuid4())
     low_id = str(uuid.uuid4())
