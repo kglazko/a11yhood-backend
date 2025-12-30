@@ -197,9 +197,10 @@ def build_display_rating_map(db, products: list[dict]) -> dict[str, dict]:
     if not product_ids:
         return {}
 
-    # Chunk rating lookups to avoid oversize PostgREST queries when many products are present.
+    # Fetch ratings for all products - with proper indexes this is fast even for large batches
+    # PostgREST has a limit on URL length, so we still chunk for safety but use larger chunks
     ratings_rows: list[dict] = []
-    chunk_size = 200
+    chunk_size = 500  # Increased from 200 since we now have indexes
     for i in range(0, len(product_ids), chunk_size):
         chunk = product_ids[i:i + chunk_size]
         resp = db.table("ratings").select("product_id,rating").in_("product_id", chunk).execute()
@@ -379,6 +380,7 @@ async def get_products(
         query = query.in_("id", list(product_ids_with_tags))
     
     if search:
+        # Use ILIKE for search - trigram index should make this efficient
         query = query.ilike("name", f"%{search}%")
     
     if created_by:
@@ -387,20 +389,26 @@ async def get_products(
     if include_banned:
         if not current_user or current_user.get("role") not in {"admin", "moderator"}:
             raise HTTPException(status_code=403, detail="Moderator or admin role required to view banned products")
+    else:
+        # Filter banned products in SQL rather than Python for better performance
+        query = query.eq("banned", False)
 
-    apply_range = min_rating is None
-    if apply_range:
-        query = query.range(offset, offset + limit - 1)
-
+    # Always apply ordering before range for consistent results
     query = query.order("created_at", desc=True)
+
+    # Optimize min_rating queries: fetch a reasonable batch instead of everything
+    # This balances between fetching too much data and making multiple queries
+    if min_rating is not None:
+        # Fetch 3x the limit to account for rating filtering, capped at 500
+        batch_size = min(limit * 3 + offset, 500)
+        query = query.range(0, batch_size - 1)
+    else:
+        query = query.range(offset, offset + limit - 1)
     
     response = query.execute()
 
     # Collect product IDs
     products = response.data or []
-
-    if not include_banned:
-        products = [p for p in products if not p.get("banned")]
 
     ratings_map = build_display_rating_map(db, products)
     if min_rating is not None:
@@ -509,6 +517,9 @@ async def count_products(
     if include_banned:
         if not current_user or current_user.get("role") not in {"admin", "moderator"}:
             raise HTTPException(status_code=403, detail="Moderator or admin role required to view banned products")
+    else:
+        # Filter banned products in SQL for better performance
+        query = query.eq("banned", False)
     
     # For min_rating is None, request an exact count to avoid the 1000-row PostgREST cap.
     if min_rating is None:
@@ -539,17 +550,14 @@ async def count_products(
             # SQLite adapter does not support count parameter; fall back to length of fetched rows.
             response = query.execute()
             products = response.data or []
-            if not include_banned:
-                products = [p for p in products if not p.get("banned")]
+            # banned already filtered in SQL via query.eq("banned", False) above
             total = len(products)
 
         return {"count": total}
 
     response = query.execute()
     products = response.data or []
-    
-    if not include_banned:
-        products = [p for p in products if not p.get("banned")]
+    # banned already filtered in SQL via query.eq("banned", False) above
 
     ratings_map = build_display_rating_map(db, products)
     products = [p for p in products if rating_meets_threshold(p, ratings_map, min_rating)]
