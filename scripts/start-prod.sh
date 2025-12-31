@@ -140,15 +140,15 @@ echo ""
 
 # Start production container
 echo -e "${GREEN}🚀 Starting production container...${NC} (t=$(ts))"
-echo "   Server will be available at: http://localhost:8000"
-echo "   API documentation at: http://localhost:8000/docs"
+echo "   Server will be available at: http://localhost:8001"
+echo "   API documentation at: http://localhost:8001/docs"
 echo ""
 
 docker run \
   -d \
   --name a11yhood-backend-prod \
   --env-file .env \
-  -p 8000:8000 \
+  -p 8001:8000 \
   --restart unless-stopped \
   --health-cmd="curl -f http://localhost:8000/health || exit 1" \
   --health-interval=30s \
@@ -165,7 +165,7 @@ fi
 # Wait for server to be ready
 echo -e "${YELLOW}⏳ Waiting for server to start...${NC}"
 for i in {1..60}; do
-  if curl -s http://localhost:8000/health >/dev/null 2>&1; then
+  if curl -s http://localhost:8001/health >/dev/null 2>&1; then
     echo -e "${GREEN}✓ Backend is ready!${NC} (t=$(ts))"
     break
   fi
@@ -203,10 +203,10 @@ echo ""
 echo -e "${GREEN}✅ PRODUCTION server is running!${NC} (t=$(ts))"
 echo ""
 echo -e "${BLUE}📡 Backend API:${NC}"
-echo "   http://localhost:8000"
+echo "   http://localhost:8001"
 echo ""
 echo -e "${BLUE}📚 API Documentation:${NC}"
-echo "   http://localhost:8000/docs"
+echo "   http://localhost:8001/docs"
 echo ""
 echo -e "${BLUE}💡 To monitor logs:${NC}"
 echo "   docker logs -f a11yhood-backend-prod"

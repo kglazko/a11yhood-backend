@@ -415,6 +415,7 @@ async def get_products(
     tags_mode: str = Query("or", pattern="^(?i)(or|and)$", description="Tag filter mode: or (default) or and"),
     min_rating: Optional[float] = Query(None, ge=0, le=5, description="Minimum display rating (user or source)"),
     updated_since: Optional[str] = Query(None, description="Filter products updated at source since this date (ISO format)"),
+    max_age: Optional[int] = Query(None, description="Filter products updated in the last N days"),
     search: Optional[str] = None,
     created_by: Optional[str] = None,
     include_banned: bool = Query(False, description="Include banned products (admin/mod only)"),
@@ -430,6 +431,10 @@ async def get_products(
     Returns denormalized response with editor_ids and tags attached to each product.
     Query supports filtering by source platform, type, text search, and creator.
     """
+    # Convert max_age to updated_since
+    if max_age is not None:
+        updated_since = (datetime.now(UTC) - timedelta(days=max_age)).isoformat()
+    
     tag_mode = (tags_mode or "or").lower()
     if tag_mode not in {"or", "and"}:
         raise HTTPException(status_code=400, detail="tags_mode must be 'or' or 'and'")
@@ -469,7 +474,6 @@ async def get_products(
     
     # Filter by source update date (show products updated at source since this date)
     if updated_since is not None:
-        print(f"DEBUG: Filtering products with updated_since={updated_since}")
         query = query.gte("source_last_updated", updated_since)
 
     # Always apply ordering before range for consistent results
@@ -489,11 +493,6 @@ async def get_products(
     # Collect product IDs
     products = response.data or []
     
-    if updated_since is not None and products:
-        print(f"DEBUG: First 3 products returned with source_last_updated:")
-        for p in products[:3]:
-            print(f"  - {p.get('name')}: source_last_updated={p.get('source_last_updated')}")
-
     # Only fetch ratings when needed for filtering OR when explicitly requested
     ratings_map = {}
     if min_rating is not None or include_ratings:
@@ -573,6 +572,7 @@ async def count_products(
     tags_mode: str = Query("or", pattern="^(?i)(or|and)$", description="Tag filter mode: or (default) or and"),
     min_rating: Optional[float] = Query(None, ge=0, le=5, description="Minimum display rating (user or source)"),
     updated_since: Optional[str] = Query(None, description="Filter products updated at source since this date (ISO format)"),
+    max_age: Optional[int] = Query(None, description="Filter products updated in the last N days"),
     search: Optional[str] = None,
     created_by: Optional[str] = None,
     include_banned: bool = Query(False, description="Include banned products (admin/mod only)"),
@@ -584,6 +584,10 @@ async def count_products(
     Returns {count: int} to help frontend paginate through all matching products.
     Applies same filters as /api/products but returns only the count.
     """
+    # Convert max_age to updated_since
+    if max_age is not None:
+        updated_since = (datetime.now(UTC) - timedelta(days=max_age)).isoformat()
+    
     tag_mode = (tags_mode or "or").lower()
     if tag_mode not in {"or", "and"}:
         raise HTTPException(status_code=400, detail="tags_mode must be 'or' or 'and'")
@@ -1259,7 +1263,7 @@ async def ban_product(
         "banned": True,
         "banned_reason": reason,
         "banned_by": current_user.get("id"),
-        "banned_at": datetime.now(UTC)
+        "banned_at": datetime.now(UTC).isoformat()
     }
 
     updated = db.table("products").update(update_data).eq("id", product_id).execute()

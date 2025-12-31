@@ -19,6 +19,18 @@ async def get_supported_sources(
     return response.data or []
 
 
+@router.get("/{source_id}", response_model=SupportedSourceResponse)
+async def get_supported_source(
+    source_id: str,
+    db = Depends(get_db),
+):
+    """Get a single supported source by ID with its markdown description (public endpoint)."""
+    response = db.table("supported_sources").select("*").eq("id", source_id).limit(1).execute()
+    if not response.data:
+        raise HTTPException(status_code=404, detail="Source not found")
+    return response.data[0]
+
+
 @router.post("", response_model=SupportedSourceResponse, status_code=201)
 async def create_supported_source(
     source: SupportedSourceCreate,
@@ -45,6 +57,10 @@ async def create_supported_source(
         "domain": source.domain.lower(),
         "name": source.name,
     }
+    
+    # Add description if provided
+    if source.description is not None:
+        db_data["description"] = source.description
     
     response = db.table("supported_sources").insert(db_data).execute()
     if not response.data:
@@ -83,6 +99,9 @@ async def update_supported_source(
     
     if source.name is not None:
         update_data["name"] = source.name
+    
+    if source.description is not None:
+        update_data["description"] = source.description
     
     if not update_data:
         # No changes, return existing

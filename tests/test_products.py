@@ -330,11 +330,14 @@ def test_get_products_filters_by_min_display_rating(client, clean_database, test
 
 def test_get_products_filters_by_max_age(client, clean_database, test_user):
     """Test max_age filter shows only recently updated products from source"""
+    # Clear all existing products first
+    clean_database.table("products").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
+    
     old_id = str(uuid.uuid4())
     recent_id = str(uuid.uuid4())
     
     # Create old product (last updated from source 10 days ago)
-    old_time = (datetime.now(UTC) - timedelta(days=10)).isoformat()
+    old_time = datetime.now(UTC) - timedelta(days=10)
     clean_database.table("products").insert([
         {
             "id": old_id,
@@ -349,7 +352,7 @@ def test_get_products_filters_by_max_age(client, clean_database, test_user):
     ]).execute()
     
     # Create recent product (last updated from source 2 days ago)
-    recent_time = (datetime.now(UTC) - timedelta(days=2)).isoformat()
+    recent_time = datetime.now(UTC) - timedelta(days=2)
     clean_database.table("products").insert([
         {
             "id": recent_id,
@@ -382,11 +385,14 @@ def test_get_products_filters_by_max_age(client, clean_database, test_user):
 
 def test_count_products_respects_max_age(client, clean_database, test_user):
     """Test /count respects max_age filter"""
+    # Clear all existing products first
+    clean_database.table("products").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
+    
     old_id = str(uuid.uuid4())
     recent_id = str(uuid.uuid4())
     
-    old_time = (datetime.now(UTC) - timedelta(days=10)).isoformat()
-    recent_time = (datetime.now(UTC) - timedelta(days=2)).isoformat()
+    old_time = datetime.now(UTC) - timedelta(days=10)
+    recent_time = datetime.now(UTC) - timedelta(days=2)
     
     clean_database.table("products").insert([
         {
