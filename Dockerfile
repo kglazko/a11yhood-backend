@@ -7,19 +7,18 @@ FROM python:3.14-slim
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies and create user early to avoid layer issues
 RUN apt-get update && apt-get install -y \
     curl \
     gcc \
     g++ \
     make \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -g 1000 appuser \
+    && useradd -m -u 1000 -g appuser appuser
 
-# Install uv for fast dependency management (using pip to avoid COPY --from issues on macOS)
-RUN pip install uv
-
-# Create non-root user for runtime
-RUN useradd -m -u 1000 appuser
+# Install uv for fast dependency management
+RUN pip install --no-cache-dir uv
 
 # Copy requirements
 COPY requirements.txt .
