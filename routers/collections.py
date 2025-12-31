@@ -7,7 +7,7 @@ Security: Users can only modify their own collections unless admin.
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import List, Optional
 from datetime import datetime, UTC
-from models.collections import CollectionCreate, CollectionUpdate, CollectionResponse, ProductIdsRequest
+from models.collections import CollectionCreate, CollectionUpdate, CollectionResponse, ProductIdsRequest, CollectionFromSearchCreate
 from services.database import get_db
 from services.auth import get_current_user, get_current_user_optional
 import uuid
@@ -57,6 +57,258 @@ async def create_collection(
         raise HTTPException(status_code=400, detail="Failed to create collection")
     
     return response.data[0]
+
+
+@router.post("/from-search", response_model=CollectionResponse, status_code=201)
+async def create_collection_from_search(
+    collection_data: CollectionFromSearchCreate,
+    current_user: dict = Depends(get_current_user),
+    db = Depends(get_db),
+):
+    """Create a new collection and populate it with search results.
+    
+    Takes the same search parameters as GET /api/products and creates a collection
+    with all matching products. The collection is automatically associated with the
+    authenticated user.
+    
+    Security: Requires authentication; collection automatically associated with creator.
+    """
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    user_id = current_user.get("id")
+    user_name = current_user.get("username", "Unknown")
+    
+    # Validate input
+    if not collection_data.name or not collection_data.name.strip():
+        raise HTTPException(status_code=400, detail="Collection name is required")
+    
+    if collection_data.description and len(collection_data.description) > 1000:
+        raise HTTPException(status_code=400, detail="Description must be 1000 characters or less")
+    
+    # Build search query using the same logic as GET /api/products
+    query = db.table("products").select("id")
+    
+    # Normalize source filters
+    source_values = set()
+    if collection_data.source:
+        source_values.update(collection_data.source)
+    if collection_data.sources:
+        source_values.update(collection_data.sources)
+    
+    # Canonicalize sources
+    if source_values:
+        try:
+            rows = db.table("supported_sources").select("name").execute()
+            name_map = {
+                str(r.get("name")).strip().lower(): str(r.get("name")).strip() 
+                for r in (rows.data or []) if r.get("name")
+            }
+            canonical_sources = []
+            for v in source_values:
+                key = str(v).strip().lower()
+                canonical_sources.append(name_map.get(key, v))
+            # Deduplicate while preserving order
+            seen = set()
+            source_values = []
+            for c in canonical_sources:
+                if c not in seen:
+                    seen.add(c)
+                    source_values.append(c)
+        except Exception:
+            source_values = list(source_values)
+        
+        query = query.in_("source", source_values)
+    
+    # Normalize type filters
+    type_values = set()
+    if collection_data.type:
+        type_values.update(collection_data.type)
+    if collection_data.types:
+        type_values.update(collection_data.types)
+    
+    if type_values:
+        query = query.in_("type", list(type_values))
+    
+    # Handle tags
+    if collection_data.tags:
+        tag_mode = collection_data.tags_mode.lower()
+        product_ids_with_tags = _get_product_ids_for_tags(db, collection_data.tags, tag_mode)
+        if not product_ids_with_tags:
+            # No products match the tag filter, create empty collection
+            product_ids = []
+        else:
+            # Apply text search and other filters to tag-filtered products
+            query = query.in_("id", list(product_ids_with_tags))
+            
+            if collection_data.search:
+                query = query.ilike("name", f"%{collection_data.search}%")
+            
+            if collection_data.created_by:
+                query = query.eq("created_by", collection_data.created_by)
+            
+            if collection_data.min_rating is not None:
+                # For min_rating, we'll filter in Python after fetching all matches
+                # since we need rating data
+                query = query.eq("banned", False)
+                query = query.order("created_at", desc=True)
+                response = query.execute()
+                products = response.data or []
+                
+                if products and collection_data.min_rating is not None:
+                    # Build rating map
+                    product_ids = [p.get("id") for p in products if p.get("id")]
+                    if product_ids:
+                        ratings_map = _build_display_rating_map(db, products)
+                        product_ids = [
+                            p.get("id") for p in products
+                            if p.get("id") and _rating_meets_threshold(p, ratings_map, collection_data.min_rating)
+                        ]
+                    else:
+                        product_ids = []
+                else:
+                    product_ids = [p.get("id") for p in products if p.get("id")]
+            else:
+                query = query.eq("banned", False)
+                query = query.order("created_at", desc=True)
+                response = query.execute()
+                products = response.data or []
+                product_ids = [p.get("id") for p in products if p.get("id")]
+    else:
+        # No tag filter, apply other filters directly
+        if collection_data.search:
+            query = query.ilike("name", f"%{collection_data.search}%")
+        
+        if collection_data.created_by:
+            query = query.eq("created_by", collection_data.created_by)
+        
+        query = query.eq("banned", False)
+        query = query.order("created_at", desc=True)
+        response = query.execute()
+        products = response.data or []
+        product_ids = [p.get("id") for p in products if p.get("id")]
+        
+        # Apply min_rating filter if specified
+        if collection_data.min_rating is not None and product_ids:
+            ratings_map = _build_display_rating_map(db, products)
+            product_ids = [
+                p.get("id") for p in products
+                if p.get("id") and _rating_meets_threshold(p, ratings_map, collection_data.min_rating)
+            ]
+    
+    # Create the collection with the search results
+    collection = {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "user_name": user_name,
+        "name": collection_data.name,
+        "description": collection_data.description,
+        "product_ids": product_ids,
+        "is_public": collection_data.is_public,
+    }
+    
+    # Insert into database
+    response = db.table("collections").insert(collection).execute()
+    
+    if not response.data:
+        raise HTTPException(status_code=400, detail="Failed to create collection")
+    
+    return response.data[0]
+
+
+def _get_product_ids_for_tags(db, tag_names: list[str], mode: str = "or") -> set[str]:
+    """Return product IDs that match provided tag names using OR/AND semantics."""
+    if not tag_names:
+        return set()
+    tag_rows = db.table("tags").select("id,name").in_("name", tag_names).execute()
+    tag_map = {row["name"]: row["id"] for row in (tag_rows.data or []) if row.get("id") and row.get("name")}
+    tag_ids = [tag_map[name] for name in tag_names if name in tag_map]
+    if not tag_ids:
+        return set()
+
+    pt_rows = db.table("product_tags").select("product_id, tag_id").in_("tag_id", tag_ids).execute()
+    if not pt_rows.data:
+        return set()
+
+    if mode == "and":
+        required = set(tag_ids)
+        product_tag_map: dict[str, set[str]] = {}
+        for row in pt_rows.data:
+            pid = row.get("product_id")
+            tid = row.get("tag_id")
+            if pid and tid:
+                product_tag_map.setdefault(pid, set()).add(tid)
+        return {pid for pid, tids in product_tag_map.items() if required.issubset(tids)}
+
+    return {row["product_id"] for row in pt_rows.data if row.get("product_id")}
+
+
+def _safe_float(value) -> Optional[float]:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _compute_display_rating(user_average: Optional[float], source_rating: Optional[float]) -> Optional[float]:
+    if user_average is not None and source_rating is not None:
+        return (user_average + source_rating) / 2
+    if user_average is not None:
+        return user_average
+    if source_rating is not None:
+        return source_rating
+    return None
+
+
+def _build_display_rating_map(db, products: list[dict]) -> dict[str, dict]:
+    """Compute display ratings and counts keyed by product ID."""
+    product_ids = [p.get("id") for p in products if p.get("id")]
+    if not product_ids:
+        return {}
+
+    # Fetch ratings for all products
+    ratings_rows: list[dict] = []
+    chunk_size = 500
+    for i in range(0, len(product_ids), chunk_size):
+        chunk = product_ids[i:i + chunk_size]
+        resp = db.table("ratings").select("product_id,rating").in_("product_id", chunk).execute()
+        ratings_rows.extend(resp.data or [])
+
+    aggregates: dict[str, dict[str, float | int]] = {}
+    for row in ratings_rows:
+        pid = row.get("product_id")
+        rating_raw = row.get("rating")
+        rating_val = _safe_float(rating_raw)
+        if not pid or rating_val is None:
+            continue
+        agg = aggregates.setdefault(pid, {"sum": 0.0, "count": 0})
+        agg["sum"] += rating_val
+        agg["count"] += 1
+
+    ratings_map: dict[str, dict] = {}
+    for product in products:
+        pid = product.get("id")
+        if not pid:
+            continue
+        agg = aggregates.get(pid, {"sum": 0.0, "count": 0})
+        user_avg = (agg["sum"] / agg["count"]) if agg["count"] else None
+        source_rating_val = _safe_float(product.get("source_rating"))
+        display_rating = _compute_display_rating(user_avg, source_rating_val)
+        ratings_map[pid] = {
+            "average_rating": user_avg,
+            "rating_count": agg.get("count", 0),
+            "display_rating": display_rating,
+        }
+    return ratings_map
+
+
+def _rating_meets_threshold(product: dict, ratings_map: dict[str, dict], min_rating: float) -> bool:
+    rating_info = ratings_map.get(product.get("id"), {})
+    display_rating = rating_info.get("display_rating")
+    if display_rating is None:
+        return False
+    return display_rating >= min_rating
+
 
 
 @router.get("", response_model=List[CollectionResponse])
@@ -172,7 +424,7 @@ async def update_collection(
     if collection_data.is_public is not None:
         update_data["is_public"] = collection_data.is_public
     
-    update_data["updated_at"] = datetime.now(UTC)
+    update_data["updated_at"] = datetime.now(UTC).isoformat()
     
     # Update in database
     response = db.table("collections").update(update_data).eq("id", collection_id).execute()
@@ -246,7 +498,7 @@ async def add_product_to_collection(
         # Update collection
         db.table("collections").update({
             "product_ids": product_ids,
-            "updated_at": datetime.now(UTC)
+            "updated_at": datetime.now(UTC).isoformat()
         }).eq("id", collection_id).execute()
     
     # Return updated collection
@@ -286,7 +538,7 @@ async def remove_product_from_collection(
         # Update collection
         db.table("collections").update({
             "product_ids": product_ids,
-            "updated_at": datetime.now(UTC)
+            "updated_at": datetime.now(UTC).isoformat()
         }).eq("id", collection_id).execute()
     
     # Return updated collection
@@ -320,7 +572,7 @@ async def remove_all_products_from_collection(
     # Clear all products
     db.table("collections").update({
         "product_ids": [],
-        "updated_at": datetime.now(UTC)
+        "updated_at": datetime.now(UTC).isoformat()
     }).eq("id", collection_id).execute()
     
     # Return updated collection
@@ -373,7 +625,7 @@ async def add_multiple_products_to_collection(
     # Update collection
     db.table("collections").update({
         "product_ids": current_product_ids,
-        "updated_at": datetime.now(UTC)
+        "updated_at": datetime.now(UTC).isoformat()
     }).eq("id", collection_id).execute()
     
     # Return updated collection
