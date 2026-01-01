@@ -307,6 +307,7 @@ class BaseScraper(ABC):
         """
         product_data: Optional[Dict[str, Any]] = None
         tag_names: Optional[list[str]] = None
+        product_name = raw_data.get('name', raw_data.get('title', 'UNKNOWN'))
         try:
             product_data = self._ensure_slug(self._create_product_dict(raw_data), ensure_unique=True)
             product_data = self._canonicalize_source(product_data)
@@ -321,7 +322,9 @@ class BaseScraper(ABC):
                     from routers.products import set_product_tags
                     set_product_tags(self.supabase, created["id"], tag_names)
                 except Exception as tag_err:
-                    print(f"[{self.get_source_name()}] Failed to set tags: {tag_err}")
+                    print(f"[{self.get_source_name()}] Failed to set tags for '{product_name}': {tag_err}")
+            if result.data:
+                print(f"[{self.get_source_name()}] ✓ Created: {product_name}")
             return bool(result.data)
         except Exception as e:
             # Fall back if target schema is missing optional image fields
@@ -336,12 +339,22 @@ class BaseScraper(ABC):
                             from routers.products import set_product_tags
                             set_product_tags(self.supabase, created["id"], tag_names)
                         except Exception as tag_err:
-                            print(f"[{self.get_source_name()}] Failed to set tags after retry: {tag_err}")
+                            print(f"[{self.get_source_name()}] Failed to set tags after retry for '{product_name}': {tag_err}")
                     print("[BaseScraper] Retried insert without image fields due to missing column; update DB schema to include image/image_alt.")
                     return bool(result.data)
                 except Exception as retry_error:
-                    print(f"[{self.get_source_name()}] Retry after removing image fields failed: {retry_error}")
-            print(f"[{self.get_source_name()}] Error creating product: {e}")
+                    print(f"[{self.get_source_name()}] ✗ Failed to create '{product_name}' (retry): {retry_error}")
+                    return False
+            
+            error_str = str(e)
+            # Check for specific constraint violations
+            if "duplicate key value violates unique constraint" in error_str:
+                if "products_slug_key" in error_str:
+                    print(f"[{self.get_source_name()}] ✗ Skipped '{product_name}': Duplicate slug (product already exists or slug collision)")
+                else:
+                    print(f"[{self.get_source_name()}] ✗ Skipped '{product_name}': Unique constraint violation: {error_str}")
+            else:
+                print(f"[{self.get_source_name()}] ✗ Failed to create '{product_name}': {error_str}")
             return False
     
     async def _update_product(self, product_id: str, raw_data: Dict[str, Any]) -> bool:
@@ -358,6 +371,7 @@ class BaseScraper(ABC):
         Returns:
             True if product was updated successfully, False otherwise
         """
+        product_name = raw_data.get('name', raw_data.get('title', 'UNKNOWN'))
         try:
             product_data = self._create_product_dict(raw_data)
             product_data = self._canonicalize_source(product_data)
@@ -381,10 +395,13 @@ class BaseScraper(ABC):
                     from routers.products import set_product_tags
                     set_product_tags(self.supabase, product_id, tag_names)
                 except Exception as tag_err:
-                    print(f"[{self.get_source_name()}] Failed to set tags on update: {tag_err}")
+                    print(f"[{self.get_source_name()}] Failed to set tags on update for '{product_name}': {tag_err}")
+            if result.data:
+                print(f"[{self.get_source_name()}] ✓ Updated: {product_name}")
             return bool(result.data)
         except Exception as e:
-            if "Could not find the 'image' column" in str(e):
+            error_str = str(e)
+            if "Could not find the 'image' column" in error_str:
                 sanitized = {k: v for k, v in product_data.items() if k not in {"image", "image_alt"}}
                 try:
                     result = self.supabase.table("products").update(self._convert_datetimes(sanitized)).eq("id", product_id).execute()
@@ -393,12 +410,13 @@ class BaseScraper(ABC):
                             from routers.products import set_product_tags
                             set_product_tags(self.supabase, product_id, tag_names)
                         except Exception as tag_err:
-                            print(f"[{self.get_source_name()}] Failed to set tags on update after retry: {tag_err}")
+                            print(f"[{self.get_source_name()}] Failed to set tags on update after retry for '{product_name}': {tag_err}")
                     print("[BaseScraper] Retried update without image fields due to missing column; update DB schema to include image/image_alt.")
                     return bool(result.data)
                 except Exception as retry_error:
-                    print(f"[{self.get_source_name()}] Retry after removing image fields failed: {retry_error}")
-            print(f"[{self.get_source_name()}] Error updating product: {e}")
+                    print(f"[{self.get_source_name()}] ✗ Failed to update '{product_name}' (retry): {retry_error}")
+                    return False
+            print(f"[{self.get_source_name()}] ✗ Failed to update '{product_name}': {error_str}")
             return False
 
     @staticmethod
