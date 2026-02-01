@@ -609,12 +609,19 @@ class SQLiteTable:
 
         Handles newer field names used by scrapers so inserts don't fail when
         the SQLite schema lacks those columns (e.g., source_url/image_url/type).
+        Also converts ISO string dates to datetime objects for SQLite compatibility.
         """
         if not isinstance(item, dict):
             return item
 
         prepared: Dict[str, Any] = {}
         model_columns = {col.name for col in self.model.__table__.columns}
+        
+        # Get datetime columns for type conversion
+        datetime_columns = {
+            col.name for col in self.model.__table__.columns 
+            if str(col.type) == 'DATETIME'
+        }
 
         # Map newer fields to legacy columns where appropriate
         if "source_url" in item and "url" in model_columns and "url" not in item:
@@ -628,6 +635,16 @@ class SQLiteTable:
         # Only keep keys that exist on the model
         for key, value in item.items():
             if key in model_columns:
+                # Convert ISO string dates to datetime objects for SQLite
+                if key in datetime_columns and isinstance(value, str):
+                    try:
+                        from datetime import datetime
+                        # Handle ISO format with or without timezone
+                        if value.endswith('Z'):
+                            value = value[:-1] + '+00:00'
+                        value = datetime.fromisoformat(value)
+                    except (ValueError, TypeError):
+                        pass  # Keep original value if parsing fails
                 prepared[key] = value
 
         return prepared

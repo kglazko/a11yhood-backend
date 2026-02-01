@@ -234,7 +234,7 @@ def _grant_permission(db, request_data: dict):
         # For SQLite tests, we update the users table
         try:
             db.table("users").update({"role": request_type}).eq("id", user_id).execute()
-        except:
+        except Exception:
             # User might not exist in users table yet (using Supabase Auth)
             pass
 

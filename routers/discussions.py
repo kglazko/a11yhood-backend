@@ -162,7 +162,6 @@ async def block_discussion(
         raise HTTPException(status_code=404, detail="Discussion not found")
 
     now = datetime.now(timezone.utc)
-    now = datetime.now(timezone.utc)
     response = db.table("discussions").update({
         "blocked": True,
         "blocked_by": current_user["id"],

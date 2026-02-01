@@ -86,7 +86,9 @@ async def update_product_url(
         product_response = db.table("products").select("*").eq("id", product_id).limit(1).execute()
         if product_response.data:
             product = product_response.data[0]
-            editor_ids = product.get("editor_ids") or []
+            # Get editor_ids from product_editors table (not from products table)
+            editors_response = db.table("product_editors").select("user_id").eq("product_id", product_id).execute()
+            editor_ids = [editor["user_id"] for editor in editors_response.data] if editors_response.data else []
             if user_id not in editor_ids and product.get("created_by") != user_id:
                 raise HTTPException(status_code=403, detail="Not authorized to update this URL")
         else:

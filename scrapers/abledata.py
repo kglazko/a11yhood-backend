@@ -556,13 +556,13 @@ class AbleDataScraper(BaseScraper):
                     # Try to parse the date text
                     try:
                         return datetime.strptime(date_text, '%B %d, %Y')
-                    except:
+                    except ValueError:
                         try:
                             return datetime.strptime(date_text, '%B %d %Y')
-                        except:
+                        except ValueError:
                             try:
                                 return datetime.strptime(date_text, '%m/%d/%Y')
-                            except:
+                            except ValueError:
                                 pass
             
             # Fallback: Look for common date patterns in page text
@@ -583,10 +583,10 @@ class AbleDataScraper(BaseScraper):
                     # Try to parse the date
                     try:
                         return datetime.strptime(date_str, '%B %d, %Y')
-                    except:
+                    except ValueError:
                         try:
                             return datetime.strptime(date_str, '%B %d %Y')
-                        except:
+                        except ValueError:
                             pass
         
         except Exception as e:

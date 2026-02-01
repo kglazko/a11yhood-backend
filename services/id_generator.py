@@ -83,7 +83,7 @@ def generate_id_with_uniqueness_check(name: str, db, table_name: str, column: st
     
     # If base ID exists, try appending numbers until we find a unique one
     for i in range(1, 1000):
-        candidate_id = f"{base_id}-{i+1}" if i == 1 else f"{base_id}-{i}"
+        candidate_id = f"{base_id}-{i+1}"
         existing = db.table(table_name).select(column).eq(column, candidate_id).limit(1).execute()
         if not existing.data:
             return candidate_id
